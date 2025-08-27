@@ -2,8 +2,8 @@ defmodule Libremarket.Compras do
 
   def comprar() do
     :show_me_the_money
-  end
 
+end
 end
 
 defmodule Libremarket.Compras.Server do

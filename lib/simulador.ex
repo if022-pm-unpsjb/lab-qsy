@@ -3,6 +3,7 @@ defmodule Simulador do
   def simular_compra() do
     envio = Enum.random([:retira, :correo])
     pago = Enum.random([:efectivo, :transferencia, :td, :tc])
+   # infraccion = Enum.random([true, false])
     Libremarket.Ui.comprar(:rand.uniform(10), envio, pago)
   end
 
