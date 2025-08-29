@@ -1,9 +1,11 @@
 defmodule Libremarket.Compras do
+  @doc """
+  Lógica principal del proceso de compra
+  """
 
-  def comprar() do
-    Libremarket.Infracciones.Server.detectarInfracciones()
-
-end
+  def procesar_compra(producto_id, medio_pago, forma_entrega) do
+    Libremarket.Infracciones.Server.detectar_infracciones()
+  end
 end
 
 defmodule Libremarket.Compras.Server do
@@ -22,8 +24,8 @@ defmodule Libremarket.Compras.Server do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def comprar(pid \\ __MODULE__) do
-    GenServer.call(pid, :comprar)
+  def comprar(pid \\ __MODULE__, producto_id, medio_pago, forma_entrega) do
+    GenServer.call(pid, {:comprar, producto_id, medio_pago, forma_entrega}, 10000)
   end
 
   # Callbacks
@@ -33,16 +35,27 @@ defmodule Libremarket.Compras.Server do
   """
   @impl true
   def init(state) do
-    {:ok, state}
+    IO.puts("Servidor de Compras iniciado")
+    {:ok, Map.put(state, :compras_realizadas, [])}
   end
 
   @doc """
   Callback para un call :comprar
   """
   @impl true
-  def handle_call(:comprar, _from, state) do
-    result = Libremarket.Compras.comprar
-    {:reply, result, state}
-  end
+  def handle_call({:comprar, producto_id, medio_pago, forma_entrega}, _from, state) do
+    # TODO: implementar procesar_compra
+    resultado = Libremarket.Compras.procesar_compra(producto_id, medio_pago, forma_entrega)
 
+    nuevo_state =
+      case resultado do
+        {:ok, compra} ->
+          %{state | compras_realizadas: [compra | state.compras_realizadas]}
+
+        _ ->
+          state
+      end
+
+    {:reply, resultado, nuevo_state}
+  end
 end
