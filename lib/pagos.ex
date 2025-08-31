@@ -1,7 +1,6 @@
 defmodule Libremarket.Pago do
   @moduledoc false
 
-  @spec procesar() ::  boolean()
   def procesar() do
     # 70% true, 30% false
     Enum.random(1..100) <= 70
