@@ -11,7 +11,7 @@ defmodule Libremarket.Compras do
       {:error, :producto_no_encontrado} ->
         {:error, :producto_no_encontrado}
 
-      {:ok, producto} ->
+      {:ok, _producto} ->
         # 2. Confirmar compra y reservar producto
         case Libremarket.Ventas.Server.confirmar_venta(producto_id) do
           {:error, reason} ->

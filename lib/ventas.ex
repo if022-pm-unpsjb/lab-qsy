@@ -4,23 +4,23 @@ defmodule Libremarket.Ventas do
   """
   def generar_productos_iniciales() do
     productos = [
-      "Notebook Lenovo",
-      "Mouse Logitech",
-      "Teclado Mecánico",
-      "Monitor 24\"",
-      "Auriculares Bluetooth",
-      "Webcam HD",
-      "Tablet Samsung",
-      "Smartphone Motorola",
-      "Cargador USB-C",
-      "Disco SSD 500GB",
-      "RAM 8GB DDR4",
-      "Impresora HP"
+      {"Notebook Lenovo", 1},
+      {"Mouse Logitech", 2},
+      {"Teclado Mecánico", 3},
+      {"Monitor 24\"", 4},
+      {"Auriculares Bluetooth", 5},
+      {"Webcam HD", 6},
+      {"Tablet Samsung", 7},
+      {"Smartphone Motorola", 8},
+      {"Cargador USB-C", 9},
+      {"Disco SSD 500GB", 10},
+      {"RAM 8GB DDR4", 11},
+      {"Impresora HP", 12}
     ]
 
-    Enum.reduce(productos, %{}, fn producto, acc ->
+    Enum.reduce(productos, %{}, fn {producto, id}, acc ->
       Map.put(acc, producto, %{
-        id: :rand.uniform(500),
+        id: id,
         nombre: producto,
         precio: :rand.uniform(50000) + 5000,
         stock: :rand.uniform(10)
@@ -51,7 +51,6 @@ defmodule Libremarket.Ventas do
     |> Enum.into(%{})
   end
 
-
   def aumentar_stock(productos, producto_id) do
     Enum.map(productos, fn {k, v} ->
       if v.id == producto_id do
@@ -62,7 +61,6 @@ defmodule Libremarket.Ventas do
     end)
     |> Enum.into(%{})
   end
-
 end
 
 defmodule Libremarket.Ventas.Server do
@@ -88,7 +86,7 @@ defmodule Libremarket.Ventas.Server do
     GenServer.call(pid, :listar_productos)
   end
 
-   # reponer stock en caso de infracción
+  # reponer stock en caso de infracción
   def reponer_stock(pid \\ __MODULE__, producto_id) do
     GenServer.cast(pid, {:reponer_stock, producto_id})
   end
@@ -130,12 +128,11 @@ defmodule Libremarket.Ventas.Server do
     {:reply, state.productos, state}
   end
 
- #  manejar reponer stock
+  #  manejar reponer stock
   @impl true
   def handle_cast({:reponer_stock, producto_id}, state) do
     nuevos_productos = Libremarket.Ventas.aumentar_stock(state.productos, producto_id)
     nuevo_state = %{state | productos: nuevos_productos}
     {:noreply, nuevo_state}
   end
-
 end
