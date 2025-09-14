@@ -1,4 +1,4 @@
-defmodule Libremarket.Envio do
+defmodule Libremarket.Envios do
   @moduledoc false
 
   # Simula cálculo del costo de envío
@@ -6,7 +6,7 @@ defmodule Libremarket.Envio do
   def calcular(:correo), do: Enum.random(500..1500)
 end
 
-defmodule Libremarket.Envio.Server do
+defmodule Libremarket.Envios.Server do
   @moduledoc """
   Servidor de Envíos
   """
@@ -42,7 +42,7 @@ defmodule Libremarket.Envio.Server do
 
   @impl true
   def handle_call({:procesarEnvio, idCompra, forma_entrega}, _from, state) do
-    costo = Libremarket.Envio.calcular(forma_entrega)
+    costo = Libremarket.Envios.calcular(forma_entrega)
 
     envio = %{
       id_compra: idCompra,
