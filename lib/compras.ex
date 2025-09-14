@@ -34,7 +34,7 @@ defmodule Libremarket.Compras do
 
                   true ->
                     # 5. Registrar envío
-                    envio = Libremarket.Envio.Server.procesarEnvio(producto_id, forma_entrega)
+                    envio = Libremarket.Envios.Server.procesarEnvio(producto_id, forma_entrega)
 
                     compra = %{
                       producto: producto_reservado,
