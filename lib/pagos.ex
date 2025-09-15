@@ -1,4 +1,4 @@
-defmodule Libremarket.Pago do
+defmodule Libremarket.Pagos do
   @moduledoc false
 
   def procesar() do
@@ -7,7 +7,7 @@ defmodule Libremarket.Pago do
   end
 end
 
-defmodule Libremarket.Pago.Server do
+defmodule Libremarket.Pagos.Server do
   @moduledoc """
   Servidor de Pagos
   """
@@ -40,7 +40,7 @@ defmodule Libremarket.Pago.Server do
 
   @impl true
   def handle_call({:procesarPago, idPago}, _from, state) do
-    resultado = Libremarket.Pago.procesar()
+    resultado = Libremarket.Pagos.procesar()
     state = Map.put(state, idPago, resultado)
     {:reply, resultado, state}
   end

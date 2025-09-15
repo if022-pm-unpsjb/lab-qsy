@@ -74,7 +74,7 @@ defmodule Libremarket.Ventas.Server do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def verificar_proucto(pid \\ __MODULE__, producto_id) do
+  def verificar_producto(pid \\ __MODULE__, producto_id) do
     GenServer.call(pid, {:verificar_producto, producto_id})
   end
 
