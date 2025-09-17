@@ -5,7 +5,6 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
       MIX_HOME: /app/mix_home
@@ -22,7 +21,6 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
@@ -39,7 +37,6 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
@@ -56,7 +53,6 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
@@ -73,15 +69,14 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
-    command: iex --sname compras --cookie secret -S mix
+    command: elixir --sname compras --cookie ${SECRET} -S mix run --no-halt --no-compile
     # para habilitar -it
-    stdin_open: true
-    tty: true
+    #stdin_open: true
+    #tty: true
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
   ventas:
@@ -90,7 +85,6 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    network_mode: "host"
     environment:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
