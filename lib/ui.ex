@@ -1,13 +1,7 @@
 defmodule Libremarket.Ui do
   def comprar(producto_id, forma_entrega, medio_pago) do
     try do
-      :erpc.call(
-        :compras@maty,
-        Libremarket.Compras.Server,
-        :comprar,
-        [producto_id, medio_pago, forma_entrega],
-        30000
-      )
+      Libremarket.Compras.Server.comprar(producto_id, medio_pago, forma_entrega)
     rescue
       error ->
         IO.puts("Error comunicándose con servicio de compras: #{inspect(error)}")
@@ -17,7 +11,7 @@ defmodule Libremarket.Ui do
 
   def listar_productos() do
     try do
-      :erpc.call(:ventas@maty, Libremarket.Ventas.Server, :listar_productos, [], 10000)
+      Libremarket.Ventas.Server.listar_productos()
     rescue
       error ->
         IO.puts("Error obteniendo productos: #{inspect(error)}")

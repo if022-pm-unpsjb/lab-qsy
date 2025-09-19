@@ -14,20 +14,22 @@ defmodule Libremarket.Pagos.Server do
 
   use GenServer
 
+  @global_name {:global, __MODULE__}
+
   # =========
   # API
   # =========
 
   @doc "Arranca el servidor de Pagos."
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
   @doc """
   Procesa un pago identificado por `idPago`.
   Devuelve `true` (aceptado) o `false` (rechazado).
   """
-  def procesarPago(pid \\ __MODULE__, idPago) do
+  def procesarPago(pid \\ @global_name, idPago) do
     GenServer.call(pid, {:procesarPago, idPago})
   end
 

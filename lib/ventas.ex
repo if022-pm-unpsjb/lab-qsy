@@ -70,24 +70,26 @@ defmodule Libremarket.Ventas.Server do
 
   use GenServer
 
+  @global_name {:global, __MODULE__}
+
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
-  def verificar_producto(pid \\ __MODULE__, producto_id) do
+  def verificar_producto(pid \\ @global_name, producto_id) do
     GenServer.call(pid, {:verificar_producto, producto_id})
   end
 
-  def confirmar_venta(pid \\ __MODULE__, producto_id) do
+  def confirmar_venta(pid \\ @global_name, producto_id) do
     GenServer.call(pid, {:confirmar_venta, producto_id})
   end
 
-  def listar_productos(pid \\ __MODULE__) do
+  def listar_productos(pid \\ @global_name) do
     GenServer.call(pid, :listar_productos)
   end
 
   # reponer stock en caso de infracción
-  def reponer_stock(pid \\ __MODULE__, producto_id) do
+  def reponer_stock(pid \\ @global_name, producto_id) do
     GenServer.cast(pid, {:reponer_stock, producto_id})
   end
 
