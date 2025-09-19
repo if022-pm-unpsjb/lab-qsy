@@ -26,3 +26,6 @@ libremarket-*.tar
 /tmp/
 .elixir_ls/
 .lexical/
+
+hex_home
+mix_home

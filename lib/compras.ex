@@ -4,7 +4,7 @@ defmodule Libremarket.Compras do
   """
   def procesar_compra(producto_id, medio_pago, forma_entrega) do
     # 1. Verificar stock
-    case Libremarket.Ventas.Server.verificar_proucto(producto_id) do
+    case Libremarket.Ventas.Server.verificar_producto(producto_id) do
       {:error, :sin_stock} ->
         {:error, :sin_stock}
 
@@ -27,24 +27,29 @@ defmodule Libremarket.Compras do
 
               false ->
                 # 4. Procesar pago
-                case Libremarket.Pago.Server.procesarPago(producto_id) do
+                case Libremarket.Pagos.Server.procesarPago(producto_id) do
                   false ->
                     reponer_producto(producto_reservado.id)
                     {:error, :pago_rechazado}
 
                   true ->
                     # 5. Registrar envío
-                    envio = Libremarket.Envio.Server.procesarEnvio(producto_id, forma_entrega)
+                    case Libremarket.Envios.Server.procesarEnvio(producto_id, forma_entrega) do
+                      envio when is_map(envio) ->
+                        compra = %{
+                          producto: producto_reservado,
+                          medio_pago: medio_pago,
+                          forma_entrega: forma_entrega,
+                          envio: envio,
+                          timestamp: DateTime.utc_now()
+                        }
 
-                    compra = %{
-                      producto: producto_reservado,
-                      medio_pago: medio_pago,
-                      forma_entrega: forma_entrega,
-                      envio: envio,
-                      timestamp: DateTime.utc_now()
-                    }
+                        {:ok, compra}
 
-                    {:ok, compra}
+                      _error ->
+                        reponer_producto(producto_reservado.id)
+                        {:error, :error_envio}
+                    end
                 end
             end
         end
@@ -54,19 +59,26 @@ defmodule Libremarket.Compras do
   # Función auxiliar para reponer stock en caso de infracción
   defp reponer_producto(producto_id) do
     # Sencillo: reducimos -1 en confirmar_venta, acá sumamos +1 manual
-    GenServer.cast(Libremarket.Ventas.Server, {:reponer_stock, producto_id})
+    try do
+      GenServer.cast(Libremarket.Ventas.Server, {:reponer_stock, producto_id})
+    rescue
+      error ->
+        IO.puts("Error reponiendo stock: #{inspect(error)}")
+    end
   end
 end
 
 defmodule Libremarket.Compras.Server do
   use GenServer
 
+  @global_name {:global, __MODULE__}
+
   # API del cliente
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
-  def comprar(pid \\ __MODULE__, producto_id, medio_pago, forma_entrega) do
+  def comprar(pid \\ @global_name, producto_id, medio_pago, forma_entrega) do
     GenServer.call(pid, {:comprar, producto_id, medio_pago, forma_entrega}, 10000)
   end
 
@@ -90,5 +102,10 @@ defmodule Libremarket.Compras.Server do
       end
 
     {:reply, resultado, nuevo_state}
+  end
+
+  @impl true
+  def handle_call(:listar_compras, _from, state) do
+    {:reply, state.compras_realizadas, state}
   end
 end
