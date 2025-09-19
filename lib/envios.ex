@@ -13,23 +13,25 @@ defmodule Libremarket.Envios.Server do
 
   use GenServer
 
+  @global_name {:global, __MODULE__}
+
   @doc "Arranca el servidor de Envíos."
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
   @doc """
   Procesa un envío para un `idCompra` con una `forma_entrega` (:retira | :correo).
   Devuelve un mapa con el resultado del envío y su costo.
   """
-  def procesarEnvio(pid \\ __MODULE__, idCompra, forma_entrega) do
+  def procesarEnvio(pid \\ @global_name, idCompra, forma_entrega) do
     GenServer.call(pid, {:procesarEnvio, idCompra, forma_entrega})
   end
 
   @doc """
   Lista todos los envíos procesados.
   """
-  def listarEnvios(pid \\ __MODULE__) do
+  def listarEnvios(pid \\ @global_name) do
     GenServer.call(pid, :listarEnvios)
   end
 
