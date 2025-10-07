@@ -31,7 +31,8 @@ defmodule Libremarket.Supervisor do
 
     childrens =
       [
-        {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]}
+        {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
+        Libremarket.ServiceRest
       ] ++ server_to_run
 
     Supervisor.init(childrens, strategy: :one_for_one)
