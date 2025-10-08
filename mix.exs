@@ -25,7 +25,9 @@ defmodule Libremarket.MixProject do
       {:libcluster, "~> 3.4"},
       {:plug, "~> 1.14"},
       {:plug_cowboy, "~> 2.7"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:amqp, "~> 3.3"},
+      {:rabbit_common, "~> 3.13", override: true}
     ]
   end
 end
