@@ -27,5 +27,5 @@ libremarket-*.tar
 .elixir_ls/
 .lexical/
 
-hex_home
-mix_home
+hex_home/
+mix_home/

@@ -38,10 +38,10 @@ defmodule Libremarket.ServiceRest do
     case conn.body_params do
       %{
         "producto_id" => producto_id,
-        "medio_pago" => medio_pago,
-        "forma_entrega" => forma_entrega
+        "medio_pago" =>  medio_pago,
+        "forma_entrega" =>  forma_entrega
       } ->
-        case Libremarket.Ui.comprar(producto_id, forma_entrega, medio_pago) do
+        case Libremarket.Ui.comprar(producto_id, String.to_atom(forma_entrega), String.to_atom(medio_pago)) do
           {:ok, compra} ->
             send_resp(conn, 201, Jason.encode!(%{
               status: "ok",
