@@ -30,6 +30,22 @@ services:
     # para habilitar -it
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
+  rest:
+    image: elixir:alpine
+    container_name: rest
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.ServiceRest
+    command: 
+      elixir --sname rest --cookie ${SECRET} -S mix run --no-halt --no-compile   
+    # para habilitar -it
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
 
   envios:
     image: elixir:alpine
