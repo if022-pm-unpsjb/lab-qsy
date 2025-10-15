@@ -1,4 +1,4 @@
-defmodule LibreMarket.AMQP.Connection do
+defmodule Libremarket.AMQP.Connection do
   @moduledoc """
   Gestiona la conexión con RabbitMQ
   """
@@ -43,16 +43,46 @@ defmodule LibreMarket.AMQP.Connection do
   end
 
   @impl true
+  def handle_call(:get_channel, _from, %{channel: nil} = state) do
+    {:reply, {:error, :no_channel}, state}
+  end
+
+  @impl true
   def handle_call(:get_channel, _from, %{channel: channel} = state) do
-    {:reply, {:ok, channel}, state}
+    # Verificar si el canal está vivo
+    if Process.alive?(channel.pid) do
+      {:reply, {:ok, channel}, state}
+    else
+      Logger.warning("Canal AMQP muerto, reconectando...")
+      send(self(), :connect)
+      {:reply, {:error, :channel_dead}, %{state | channel: nil}}
+    end
   end
 
   defp connect do
-    amqp_url = Application.get_env(:libremarket, :amqp)[:url]
+    amqp_config = Application.get_env(:libremarket, :amqp)
+    amqp_url = if amqp_config, do: amqp_config[:url], else: nil
 
-    with {:ok, conn} <- AMQP.Connection.open(amqp_url),
-         {:ok, channel} <- AMQP.Channel.open(conn) do
-      {:ok, conn, channel}
+    if is_nil(amqp_url) do
+      Logger.error("AMQP_URL no configurada. Verifica config/runtime.exs o la variable de entorno AMQP_URL")
+      {:error, :no_amqp_url}
+    else
+      # Opciones SSL para CloudAMQP
+      ssl_options = [
+        cacerts: :public_key.cacerts_get(),
+        verify: :verify_peer,
+        server_name_indication: :disable,
+        depth: 3
+      ]
+
+      connection_options = [
+        ssl_options: ssl_options
+      ]
+
+      with {:ok, conn} <- AMQP.Connection.open(amqp_url, connection_options),
+           {:ok, channel} <- AMQP.Channel.open(conn) do
+        {:ok, conn, channel}
+      end
     end
   end
 end

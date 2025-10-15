@@ -29,10 +29,16 @@ defmodule Libremarket.Supervisor do
         server_to_run -> [{String.to_existing_atom(server_to_run), %{}}]
       end
 
+    # Servicios AMQP (siempre activos)
+    amqp_services = [
+      Libremarket.AMQP.Connection,
+      Libremarket.AMQP.Consumer
+    ]
+
     childrens =
       [
         {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]}
-      ] ++ server_to_run
+      ] ++ amqp_services ++ server_to_run
 
     Supervisor.init(childrens, strategy: :one_for_one)
   end

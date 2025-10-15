@@ -2,6 +2,7 @@ defmodule Libremarket.Compras do
   @doc """
   Lógica principal del proceso de compra.
   """
+  alias Libremarket.AMQP.Publisher
   def procesar_compra(producto_id, medio_pago, forma_entrega) do
     # 1. Verificar stock
     case Libremarket.Ventas.Server.verificar_producto(producto_id) do
@@ -23,6 +24,15 @@ defmodule Libremarket.Compras do
               true ->
                 # Liberar producto (devolvemos stock +1)
                 reponer_producto(producto_reservado.id)
+                
+                # Publicar evento de infracción
+                Publisher.publish("infracciones.events", %{
+                  "event_type" => "infraccion_detectada",
+                  "compra_id" => "compra_#{:rand.uniform(10000)}",
+                  "producto_id" => producto_id,
+                  "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                })
+                
                 {:error, :infraccion_detectada}
 
               false ->
@@ -30,12 +40,36 @@ defmodule Libremarket.Compras do
                 case Libremarket.Pagos.Server.procesarPago(producto_id) do
                   false ->
                     reponer_producto(producto_reservado.id)
+                    
+                    # Publicar evento de pago rechazado
+                    Publisher.publish("pagos.events", %{
+                      "event_type" => "pago_rechazado",
+                      "pago_id" => "pago_#{producto_id}",
+                      "producto_id" => producto_id,
+                      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                    })
+                    
                     {:error, :pago_rechazado}
 
                   true ->
+                    # Publicar evento de pago procesado
+                    Publisher.publish("pagos.events", %{
+                      "event_type" => "pago_procesado",
+                      "pago_id" => "pago_#{producto_id}",
+                      "resultado" => "aprobado",
+                      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                    })
+                    
                     # 5. Registrar envío
                     case Libremarket.Envios.Server.procesarEnvio(producto_id, forma_entrega) do
                       envio when is_map(envio) ->
+                        # Publicar evento de envío creado
+                        Publisher.publish("envios.events", %{
+                          "event_type" => "envio_creado",
+                          "envio" => envio,
+                          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                        })
+                        
                         compra = %{
                           producto: producto_reservado,
                           medio_pago: medio_pago,
@@ -43,11 +77,27 @@ defmodule Libremarket.Compras do
                           envio: envio,
                           timestamp: DateTime.utc_now()
                         }
+                        
+                        # Publicar evento de compra realizada
+                        Publisher.publish("compras.events", %{
+                          "event_type" => "compra_realizada",
+                          "compra" => compra,
+                          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                        })
 
                         {:ok, compra}
 
                       _error ->
                         reponer_producto(producto_reservado.id)
+                        
+                        # Publicar evento de compra fallida
+                        Publisher.publish("compras.events", %{
+                          "event_type" => "compra_fallida",
+                          "motivo" => "error_envio",
+                          "producto_id" => producto_id,
+                          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+                        })
+                        
                         {:error, :error_envio}
                     end
                 end

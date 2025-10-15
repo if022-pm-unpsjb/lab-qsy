@@ -69,6 +69,7 @@ defmodule Libremarket.Ventas.Server do
   """
 
   use GenServer
+  alias Libremarket.AMQP.Publisher
 
   @global_name {:global, __MODULE__}
 
@@ -118,6 +119,22 @@ defmodule Libremarket.Ventas.Server do
         nuevos_productos = Libremarket.Ventas.reducir_stock(state.productos, producto_id)
         nuevas_ventas = [%{producto: producto, timestamp: DateTime.utc_now()} | state.ventas]
         nuevo_state = %{state | productos: nuevos_productos, ventas: nuevas_ventas}
+        
+        # Publicar evento de producto vendido
+        Publisher.publish("ventas.events", %{
+          "event_type" => "producto_vendido",
+          "producto_id" => producto_id,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+        
+        # Publicar evento de stock actualizado
+        Publisher.publish("ventas.events", %{
+          "event_type" => "stock_actualizado",
+          "producto_id" => producto_id,
+          "stock" => producto.stock - 1,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+        
         {:reply, {:ok, producto}, nuevo_state}
 
       {:error, reason} ->
