@@ -31,8 +31,8 @@ defmodule Libremarket.Supervisor do
 
     # Servicios AMQP (siempre activos)
     amqp_services = [
-      Libremarket.AMQP.Connection,
-      Libremarket.AMQP.Consumer
+      Libremarket.AMQP.Connection
+      #Libremarket.AMQP.Consumer
     ]
 
     childrens =

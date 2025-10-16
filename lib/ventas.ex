@@ -1,6 +1,6 @@
 defmodule Libremarket.Ventas do
   @doc """
-    Genera productos iniciales con stock aleatorio
+  Genera productos iniciales con stock aleatorio
   """
   def generar_productos_iniciales() do
     productos = [
@@ -65,11 +65,10 @@ end
 
 defmodule Libremarket.Ventas.Server do
   @moduledoc """
-    Servidor de Ventas - Maneja productos y stock
+  Servidor de Ventas - Maneja productos y stock
   """
-
   use GenServer
-  alias Libremarket.AMQP.Publisher
+  require Logger
 
   @global_name {:global, __MODULE__}
 
@@ -89,7 +88,6 @@ defmodule Libremarket.Ventas.Server do
     GenServer.call(pid, :listar_productos)
   end
 
-  # reponer stock en caso de infracción
   def reponer_stock(pid \\ @global_name, producto_id) do
     GenServer.cast(pid, {:reponer_stock, producto_id})
   end
@@ -97,7 +95,7 @@ defmodule Libremarket.Ventas.Server do
   @impl true
   def init(_state) do
     productos = Libremarket.Ventas.generar_productos_iniciales()
-    IO.puts("Servidor de Ventas iniciado con #{map_size(productos)} productos")
+    Logger.info("Servidor de Ventas iniciado con #{map_size(productos)} productos")
     {:ok, %{productos: productos, ventas: []}}
   end
 
@@ -106,7 +104,6 @@ defmodule Libremarket.Ventas.Server do
     case Libremarket.Ventas.verificar_stock(state.productos, producto_id) do
       {:ok, producto} ->
         {:reply, {:ok, producto}, state}
-
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
@@ -119,24 +116,8 @@ defmodule Libremarket.Ventas.Server do
         nuevos_productos = Libremarket.Ventas.reducir_stock(state.productos, producto_id)
         nuevas_ventas = [%{producto: producto, timestamp: DateTime.utc_now()} | state.ventas]
         nuevo_state = %{state | productos: nuevos_productos, ventas: nuevas_ventas}
-        
-        # Publicar evento de producto vendido
-        Publisher.publish("ventas.events", %{
-          "event_type" => "producto_vendido",
-          "producto_id" => producto_id,
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        
-        # Publicar evento de stock actualizado
-        Publisher.publish("ventas.events", %{
-          "event_type" => "stock_actualizado",
-          "producto_id" => producto_id,
-          "stock" => producto.stock - 1,
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        
-        {:reply, {:ok, producto}, nuevo_state}
 
+        {:reply, {:ok, producto}, nuevo_state}
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
@@ -147,11 +128,181 @@ defmodule Libremarket.Ventas.Server do
     {:reply, state.productos, state}
   end
 
-  #  manejar reponer stock
   @impl true
   def handle_cast({:reponer_stock, producto_id}, state) do
     nuevos_productos = Libremarket.Ventas.aumentar_stock(state.productos, producto_id)
     nuevo_state = %{state | productos: nuevos_productos}
+    Logger.info("Stock repuesto para producto #{producto_id}")
     {:noreply, nuevo_state}
+  end
+end
+
+defmodule Libremarket.Ventas.Consumer do
+  @moduledoc """
+  Consumer AMQP para el servicio de Ventas.
+  Escucha requests de verificación/confirmación de ventas y reposición de stock.
+  """
+  use GenServer
+  require Logger
+  alias Libremarket.AMQP.{Connection, Publisher}
+
+  @exchange "libremarket_exchange"
+  @queue "ventas_queue"
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    send(self(), :setup)
+    {:ok, %{}}
+  end
+
+  @impl true
+  def handle_info(:setup, state) do
+    with {:ok, channel} <- Connection.get_channel(),
+         :ok <- setup_queue(channel),
+         {:ok, _consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
+      Logger.info("Consumer de Ventas iniciado en cola: #{@queue}")
+      {:noreply, Map.put(state, :channel, channel)}
+    else
+      error ->
+        Logger.error("Error configurando consumer de Ventas: #{inspect(error)}")
+        Process.send_after(self(), :setup, 5000)
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:basic_deliver, payload, meta}, state) do
+    spawn(fn -> handle_message(payload, meta) end)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:basic_consume_ok, _meta}, state), do: {:noreply, state}
+  @impl true
+  def handle_info({:basic_cancel, _meta}, state), do: {:stop, :normal, state}
+  @impl true
+  def handle_info({:basic_cancel_ok, _meta}, state), do: {:noreply, state}
+
+  defp setup_queue(channel) do
+    with :ok <- AMQP.Exchange.declare(channel, @exchange, :topic, durable: true),
+         {:ok, _info} <- AMQP.Queue.declare(channel, @queue, durable: true),
+         :ok <- AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "ventas.requests") do
+      :ok
+    end
+  end
+
+  defp handle_message(payload, meta) do
+    case Jason.decode(payload) do
+      {:ok, message} ->
+        process_message(message)
+        ack_message(meta)
+      {:error, reason} ->
+        Logger.error("Error decodificando mensaje: #{inspect(reason)}")
+        nack_message(meta)
+    end
+  end
+
+  defp process_message(%{"request_type" => "verificar_stock", "compra_id" => compra_id, "producto_id" => producto_id}) do
+    Logger.info("Verificando stock para producto #{producto_id}, compra #{compra_id}")
+
+    case Libremarket.Ventas.Server.verificar_producto(producto_id) do
+      {:ok, producto} ->
+        # Responder con stock verificado
+        Publisher.publish("ventas.responses", %{
+          "response_type" => "stock_verificado",
+          "compra_id" => compra_id,
+          "producto" => %{
+            "id" => producto.id,
+            "nombre" => producto.nombre,
+            "precio" => producto.precio,
+            "stock" => producto.stock
+          },
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+      {:error, reason} ->
+        # Responder con error
+        Publisher.publish("ventas.responses", %{
+          "response_type" => "error_stock",
+          "compra_id" => compra_id,
+          "error" => Atom.to_string(reason),
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+    end
+  end
+
+  defp process_message(%{"request_type" => "confirmar_venta", "compra_id" => compra_id, "producto_id" => producto_id}) do
+    Logger.info("Confirmando venta para producto #{producto_id}, compra #{compra_id}")
+
+    case Libremarket.Ventas.Server.confirmar_venta(producto_id) do
+      {:ok, producto} ->
+        # Publicar evento de venta confirmada
+        Publisher.publish("ventas.events", %{
+          "event_type" => "producto_vendido",
+          "producto_id" => producto_id,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+        # Publicar evento de stock actualizado
+        Publisher.publish("ventas.events", %{
+          "event_type" => "stock_actualizado",
+          "producto_id" => producto_id,
+          "stock" => producto.stock - 1,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+        # Responder a compras
+        Publisher.publish("ventas.responses", %{
+          "response_type" => "venta_confirmada",
+          "compra_id" => compra_id,
+          "producto" => %{
+            "id" => producto.id,
+            "nombre" => producto.nombre,
+            "precio" => producto.precio,
+            "stock" => producto.stock
+          },
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+      {:error, reason} ->
+        Publisher.publish("ventas.responses", %{
+          "response_type" => "error_venta",
+          "compra_id" => compra_id,
+          "error" => Atom.to_string(reason),
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+    end
+  end
+
+  defp process_message(%{"request_type" => "reponer_stock", "producto_id" => producto_id}) do
+    Logger.info("Reponiendo stock para producto #{producto_id}")
+    Libremarket.Ventas.Server.reponer_stock(producto_id)
+
+    # Publicar evento de stock repuesto
+    Publisher.publish("ventas.events", %{
+      "event_type" => "stock_repuesto",
+      "producto_id" => producto_id,
+      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+    })
+  end
+
+  defp process_message(message) do
+    Logger.warning("Mensaje no reconocido en Ventas Consumer: #{inspect(message)}")
+  end
+
+  defp ack_message(meta) do
+    with {:ok, channel} <- Connection.get_channel() do
+      AMQP.Basic.ack(channel, meta.delivery_tag)
+    end
+  end
+
+  defp nack_message(meta) do
+    with {:ok, channel} <- Connection.get_channel() do
+      AMQP.Basic.nack(channel, meta.delivery_tag, requeue: false)
+    end
   end
 end
