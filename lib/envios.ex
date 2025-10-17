@@ -1,7 +1,5 @@
 defmodule Libremarket.Envios do
   @moduledoc false
-
-  # Simula cálculo del costo de envío
   def calcular(:retira), do: 0
   def calcular(:correo), do: Enum.random(500..1500)
 end
@@ -10,48 +8,37 @@ defmodule Libremarket.Envios.Server do
   @moduledoc """
   Servidor de Envíos
   """
-
   use GenServer
+  require Logger
 
   @global_name {:global, __MODULE__}
 
-  @doc "Arranca el servidor de Envíos."
   def start_link(opts \\ %{}) do
     GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
-  @doc """
-  Procesa un envío para un `idCompra` con una `forma_entrega` (:retira | :correo).
-  Devuelve un mapa con el resultado del envío y su costo.
-  """
   def procesarEnvio(pid \\ @global_name, idCompra, forma_entrega) do
     GenServer.call(pid, {:procesarEnvio, idCompra, forma_entrega})
   end
 
-  @doc """
-  Lista todos los envíos procesados.
-  """
   def listarEnvios(pid \\ @global_name) do
     GenServer.call(pid, :listarEnvios)
   end
 
-  # =========
-  # Callbacks
-  # =========
-
   @impl true
-  def init(_opts), do: {:ok, %{}}
+  def init(_opts) do
+    Logger.info("Servidor de Envíos iniciado")
+    {:ok, %{}}
+  end
 
   @impl true
   def handle_call({:procesarEnvio, idCompra, forma_entrega}, _from, state) do
     costo = Libremarket.Envios.calcular(forma_entrega)
-
     envio = %{
       id_compra: idCompra,
       forma: forma_entrega,
       costo: costo
     }
-
     state = Map.put(state, idCompra, envio)
     {:reply, envio, state}
   end
@@ -65,7 +52,6 @@ end
 defmodule Libremarket.Envios.Consumer do
   @moduledoc """
   Consumer AMQP específico para el servicio de Envíos
-  Escucha mensajes de envios.requests y publica respuestas
   """
   use GenServer
   require Logger
@@ -126,63 +112,39 @@ defmodule Libremarket.Envios.Consumer do
         process_message(message)
         ack_message(meta)
       {:error, reason} ->
-        Logger.error("Error decodificando mensaje en Envíos: #{inspect(reason)}")
+        Logger.error("Error decodificando mensaje: #{inspect(reason)}")
         nack_message(meta)
     end
   end
 
-  defp process_message(%{
-    "request_type" => "procesar_envio",
-    "compra_id" => compra_id,
-    "producto_id" => producto_id,
-    "forma_entrega" => forma_entrega
-  }) do
+  defp process_message(%{"request_type" => "procesar_envio", "compra_id" => compra_id, "producto_id" => producto_id, "forma_entrega" => forma_entrega}) do
     Logger.info("Procesando envío para compra #{compra_id}, forma: #{forma_entrega}")
 
-    try do
-      forma_atom = String.to_existing_atom(forma_entrega)
-      envio = Libremarket.Envios.Server.procesarEnvio(producto_id, forma_atom)
+    forma_atom = String.to_atom(forma_entrega)
+    envio = Libremarket.Envios.Server.procesarEnvio(producto_id, forma_atom)
 
-      # Publicar evento de envío creado
-      Publisher.publish("envios.events", %{
-        "event_type" => "envio_creado",
-        "compra_id" => compra_id,
-        "envio" => %{
-          "id_compra" => envio.id_compra,
-          "forma" => Atom.to_string(envio.forma),
-          "costo" => envio.costo
-        },
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+    # Publicar evento de envío creado
+    Publisher.publish("envios.events", %{
+      "event_type" => "envio_creado",
+      "envio" => %{
+        "id_compra" => envio.id_compra,
+        "forma" => Atom.to_string(envio.forma),
+        "costo" => envio.costo
+      },
+      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+    })
 
-      # Responder a compras con el envío procesado
-      Publisher.publish("compras.responses", %{
-        "response_type" => "envio_procesado",
-        "compra_id" => compra_id,
-        "success" => true,
-        "envio" => %{
-          "id_compra" => envio.id_compra,
-          "forma" => Atom.to_string(envio.forma),
-          "costo" => envio.costo
-        },
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
-
-      Logger.info("Envío procesado exitosamente para compra #{compra_id}: #{inspect(envio)}")
-
-    rescue
-      e ->
-        Logger.error("Error procesando envío para compra #{compra_id}: #{inspect(e)}")
-
-        # Publicar error
-        Publisher.publish("compras.responses", %{
-          "response_type" => "envio_procesado",
-          "compra_id" => compra_id,
-          "success" => false,
-          "error" => "error_envio",
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-    end
+    # Responder a compras
+    Publisher.publish("envios.responses", %{
+      "response_type" => "envio_procesado",
+      "compra_id" => compra_id,
+      "envio" => %{
+        "id_compra" => envio.id_compra,
+        "forma" => Atom.to_string(envio.forma),
+        "costo" => envio.costo
+      },
+      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+    })
   end
 
   defp process_message(message) do

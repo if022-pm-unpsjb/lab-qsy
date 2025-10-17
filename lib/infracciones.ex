@@ -1,6 +1,5 @@
 defmodule Libremarket.Infracciones do
   @moduledoc false
-
   @doc """
   Detecta infracciones con 30% de probabilidad
   """
@@ -11,17 +10,13 @@ end
 
 defmodule Libremarket.Infracciones.Server do
   @moduledoc """
-  Infracciones
+  Servidor de Infracciones
   """
-
   use GenServer
+  require Logger
 
   @global_name {:global, __MODULE__}
 
-  # API del cliente
-  @doc """
-  Crea un nuevo servidor de Infracciones.
-  """
   def start_link(opts \\ %{}) do
     GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
@@ -34,11 +29,10 @@ defmodule Libremarket.Infracciones.Server do
     GenServer.call(pid, :listar_infracciones)
   end
 
-  # Callbacks
   @impl true
   def init(_state) do
-    IO.puts("Servidor de Infracciones iniciado")
-    {:ok, %{infracciones: %{}}}
+    Logger.info("Servidor de Infracciones iniciado")
+    {:ok, %{infracciones: []}}
   end
 
   @impl true
@@ -50,7 +44,6 @@ defmodule Libremarket.Infracciones.Server do
         nuevas_infracciones = [
           %{id_compra: id_compra, timestamp: DateTime.utc_now()} | state.infracciones
         ]
-
         %{state | infracciones: nuevas_infracciones}
       else
         state
@@ -67,7 +60,7 @@ end
 
 defmodule Libremarket.Infracciones.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Infracciones
+  Consumer AMQP específico para el servicio de Infracciones
   """
   use GenServer
   require Logger
@@ -133,50 +126,35 @@ defmodule Libremarket.Infracciones.Consumer do
     end
   end
 
-  defp process_message(%{
-    "request_type" => "detectar_infracciones",
-    "compra_id" => compra_id,
-    "producto_id" => producto_id
-  }) do
-    Logger.info("Detectando infracciones para compra #{compra_id}, producto: #{producto_id}")
+  defp process_message(%{"request_type" => "detectar_infracciones", "compra_id" => compra_id, "producto_id" => producto_id}) do
+    Logger.info("Detectando infracciones para compra #{compra_id}, producto #{producto_id}")
 
-    try do
-      tiene_infraccion = Libremarket.Infracciones.Server.detectar_infracciones(producto_id)
+    tiene_infraccion = Libremarket.Infracciones.Server.detectar_infracciones(producto_id)
 
-      if tiene_infraccion do
-        # Publicar evento de infracción detectada
-        Publisher.publish("infracciones.events", %{
-          "event_type" => "infraccion_detectada",
-          "compra_id" => compra_id,
-          "producto_id" => producto_id,
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-
-        Logger.warning("¡Infracción detectada! Compra: #{compra_id}, Producto: #{producto_id}")
-      else
-        Logger.info("Sin infracciones para compra #{compra_id}")
-      end
-
-      # Responder a compras
-      Publisher.publish("infracciones.responses", %{
-        "response_type" => "infracciones_detectadas",
+    if tiene_infraccion do
+      # Publicar evento de infracción
+      Publisher.publish("infracciones.events", %{
+        "event_type" => "infraccion_detectada",
         "compra_id" => compra_id,
-        "tiene_infraccion" => tiene_infraccion,
+        "producto_id" => producto_id,
         "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
       })
 
-    rescue
-      e ->
-        Logger.error("Error detectando infracciones: #{inspect(e)}")
-
-        # En caso de error, reportar como sin infracciones para no bloquear
-        Publisher.publish("infracciones.responses", %{
-          "response_type" => "infracciones_detectadas",
-          "compra_id" => compra_id,
-          "tiene_infraccion" => false,
-          "error" => "Error en detección",
-          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-        })
+      # Responder a compras
+      Publisher.publish("infracciones.responses", %{
+        "response_type" => "infraccion_detectada",
+        "compra_id" => compra_id,
+        "tiene_infraccion" => true,
+        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+    else
+      # No hay infracción, continuar
+      Publisher.publish("infracciones.responses", %{
+        "response_type" => "sin_infraccion",
+        "compra_id" => compra_id,
+        "tiene_infraccion" => false,
+        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
     end
   end
 
