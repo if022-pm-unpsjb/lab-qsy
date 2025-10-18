@@ -9,7 +9,6 @@ defmodule Libremarket.Ui do
       # Generar ID de compra único
       compra_id = "compra_#{:rand.uniform(100000)}"
 
-      # Iniciar compra de forma asíncrona
       Task.start(fn ->
         Libremarket.Compras.Server.comprar(producto_id, medio_pago, forma_entrega)
       end)
@@ -36,13 +35,8 @@ defmodule Libremarket.Ui do
         {:error, :servicio_no_disponible}
     catch
       :exit, {:timeout, _} ->
-        IO.puts("⏱️  Timeout: La compra está tomando mucho tiempo.")
+        IO.puts("Timeout: La compra está tomando mucho tiempo.")
         IO.puts("Esto puede significar que algún servicio no está respondiendo.")
-        IO.puts("Verifica que todos los servicios estén corriendo:")
-        IO.puts("  - Ventas.Server y Ventas.Consumer")
-        IO.puts("  - Pagos.Server y Pagos.Consumer")
-        IO.puts("  - Envios.Server y Envios.Consumer")
-        IO.puts("  - Infracciones.Server y Infracciones.Consumer")
         {:error, :timeout}
     end
   end
@@ -94,21 +88,16 @@ defmodule Libremarket.Ui do
 
     Enum.each(servicios, fn {nombre, modulo} ->
       case Process.whereis(modulo) do
-        nil -> IO.puts("❌ #{nombre}")
-        pid -> IO.puts("✅ #{nombre}: #{inspect(pid)}")
+        nil -> IO.puts("#{nombre}")
+        pid -> IO.puts("#{nombre}: #{inspect(pid)}")
       end
     end)
 
     IO.puts("\nResultado: #{activos}/#{total} servicios activos")
 
     if activos < total do
-      IO.puts("\n⚠️  Algunos servicios no están corriendo!")
-      IO.puts("En Docker, asegúrate de que todos los contenedores estén up:")
-      IO.puts("  docker-compose ps")
-      IO.puts("  docker-compose logs -f")
+      IO.puts("\nAlgunos servicios no están corriendo")   
     end
-
-    IO.puts("===================================\n")
 
     {activos, total}
   end
@@ -141,7 +130,5 @@ defmodule Libremarket.Ui do
         IO.puts("  Timestamp: #{compra.timestamp}")
       end)
     end
-
-    IO.puts("===========================\n")
   end
 end

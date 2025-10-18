@@ -60,7 +60,7 @@ end
 
 defmodule Libremarket.Infracciones.Consumer do
   @moduledoc """
-  Consumer AMQP específico para el servicio de Infracciones
+  Consumer AMQP para el servicio de Infracciones
   """
   use GenServer
   require Logger

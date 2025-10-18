@@ -51,7 +51,7 @@ end
 
 defmodule Libremarket.Envios.Consumer do
   @moduledoc """
-  Consumer AMQP específico para el servicio de Envíos
+  Consumer AMQP para el servicio de Envíos
   """
   use GenServer
   require Logger

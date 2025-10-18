@@ -67,10 +67,7 @@ end
     {:reply, state.compras_realizadas, state}
   end
 
-  # ===================================
   # Handlers para respuestas de Ventas
-  # ===================================
-
   @impl true
   def handle_cast({:stock_verificado, compra_id, producto}, state) do
     case Map.get(state.compras_en_proceso, compra_id) do
@@ -134,10 +131,7 @@ end
     end
   end
 
-  # =========================================
   # Handlers para respuestas de Infracciones
-  # =========================================
-
   @impl true
   def handle_cast({:infraccion_detectada, compra_id}, state) do
     case Map.get(state.compras_en_proceso, compra_id) do
@@ -188,10 +182,7 @@ end
     end
   end
 
-  # ===================================
   # Handlers para respuestas de Pagos
-  # ===================================
-
   @impl true
   def handle_cast({:pago_aprobado, compra_id}, state) do
     case Map.get(state.compras_en_proceso, compra_id) do
@@ -242,10 +233,7 @@ end
     end
   end
 
-  # ===================================
   # Handlers para respuestas de Envíos
-  # ===================================
-
   @impl true
   def handle_cast({:envio_procesado, compra_id, envio}, state) do
     case Map.get(state.compras_en_proceso, compra_id) do
@@ -429,7 +417,6 @@ defmodule Libremarket.Compras.Consumer do
 
   # Respuestas de Envíos
   defp process_message(%{"response_type" => "envio_procesado", "compra_id" => compra_id, "envio" => envio}) do
-    # Convertir envio map de strings a atoms para compatibilidad
     envio_atom = %{
       id_compra: envio["id_compra"],
       forma: String.to_atom(envio["forma"]),
