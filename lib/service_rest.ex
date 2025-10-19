@@ -15,10 +15,6 @@ defmodule Libremarket.ServiceRest do
     json_decoder: Jason
   plug :dispatch
 
-  # =========
-  # RUTAS
-  # =========
-
   # Listar productos disponibles
   get "/productos" do
     productos = Libremarket.Ui.listar_productos()
@@ -37,7 +33,7 @@ defmodule Libremarket.ServiceRest do
   post "/comprar" do
     case conn.body_params do
       %{
-        "producto_id" => producto_id,
+        "producto_id" => producto_id, # Usar Integer, nunca string, sino tira error
         "medio_pago" =>  medio_pago,
         "forma_entrega" =>  forma_entrega
       } ->
@@ -60,22 +56,15 @@ defmodule Libremarket.ServiceRest do
     end
   end
 
-  # Ruta por defecto
   match _ do
     send_resp(conn, 404, Jason.encode!(%{error: "Ruta no encontrada"}))
   end
 
-  # =========
-  # MANEJO DE ERRORES
-  # =========
   def handle_errors(conn, %{reason: reason}) do
     IO.puts("Error en request: #{inspect(reason)}")
     send_resp(conn, conn.status, Jason.encode!(%{error: "Error interno"}))
   end
 
-  # =========
-  # INTEGRACIÓN CON SUPERVISOR
-  # =========
   def child_spec(_opts) do
     Plug.Cowboy.child_spec(
       scheme: :http,

@@ -5,7 +5,7 @@ defmodule Libremarket.MixProject do
     [
       app: :libremarket,
       version: "0.1.0",
-      elixir: "~> 1.14",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -25,7 +25,9 @@ defmodule Libremarket.MixProject do
       {:libcluster, "~> 3.4"},
       {:plug, "~> 1.14"},
       {:plug_cowboy, "~> 2.7"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:amqp, "~> 3.3"},
+      {:castore, "~> 1.0"}
     ]
   end
 end
