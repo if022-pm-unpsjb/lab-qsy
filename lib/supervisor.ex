@@ -17,15 +17,17 @@ defmodule Libremarket.Supervisor do
         config: [
           port: 45892,
           if_addr: "0.0.0.0",
-          multicast_addr: "127.0.0.1",
-          broadcast_only: true,
-          secret: "secret"
+          multicast_addr: "230.1.1.251",
+          multicast_ttl: 1,
+          broadcast_only: false,
+          secret: "libremarket_secret"
         ]
       ]
     ]
 
-    # Servicios AMQP (siempre activos) - Solo Connection
-    amqp_services = [
+    # Servicios base (siempre activos)
+    base_services = [
+      {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
       Libremarket.AMQP.Connection
     ]
 
@@ -45,7 +47,7 @@ defmodule Libremarket.Supervisor do
         Logger.info("Iniciando servicio de Compras con Consumer")
         [
           {Libremarket.Compras.Server, %{}},
-          Libremarket.Compras.Consumer,
+          Libremarket.Compras.Consumer
         ]
 
       "Elixir.Libremarket.Pagos.Server" ->
@@ -63,19 +65,27 @@ defmodule Libremarket.Supervisor do
         ]
 
       "Elixir.Libremarket.Infracciones.Server" ->
-        Logger.info("Iniciando servicio de Infracciones con Consumer")
-        [
-          {Libremarket.Infracciones.Server, %{}},
-          Libremarket.Infracciones.Consumer
-        ]
+        is_replica = System.get_env("IS_REPLICA") == "true"
+
+        if is_replica do
+          Logger.info("✓ Iniciando RÉPLICA de Infracciones (solo recibe estado, SIN Consumer)")
+          [
+            {Libremarket.Infracciones.Server, %{}}
+          ]
+        else
+          Logger.info("✓ Iniciando PRIMARIO de Infracciones (con Consumer AMQP)")
+          [
+            {Libremarket.Infracciones.Server, %{}},
+            Libremarket.Infracciones.Consumer
+          ]
+        end
 
       "Elixir.Libremarket.ServiceRest" ->
         Logger.info("Iniciando servicio REST API")
         [Libremarket.ServiceRest]
 
-     server_name ->
+      server_name ->
         Logger.warning("Servidor no reconocido: #{server_name}")
-        # Intentar parsear el nombre y crear el servicio
         try do
           module = String.to_existing_atom(server_name)
           Logger.info("Iniciando módulo: #{inspect(module)}")
@@ -87,12 +97,10 @@ defmodule Libremarket.Supervisor do
         end
     end
 
-    children =
-      [
-        {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]}
-      ] ++ amqp_services ++ server_to_run
+    children = base_services ++ server_to_run
 
     Logger.info("Total de servicios a iniciar: #{length(children)}")
+    Logger.info("- Servicios base: #{length(base_services)}")
     Logger.info("- Servicios de negocio: #{length(server_to_run)}")
 
     Supervisor.init(children, strategy: :one_for_one)

@@ -57,6 +57,7 @@ services:
     command: elixir --sname envios --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
+  # INFRACCIONES - PRIMARIO (procesa mensajes AMQP)
   infracciones:
     image: elixir:1.15.7-alpine
     container_name: infracciones
@@ -68,7 +69,40 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
+      IS_REPLICA: "false"  # Este es el primario
     command: elixir --sname infracciones --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  # INFRACCIONES - RÉPLICA 1 (solo recibe estado)
+  infracciones_replica1:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones_replica1
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
+      IS_REPLICA: "true"  # Esta es una réplica
+    command: elixir --sname infracciones_replica1 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  # INFRACCIONES - RÉPLICA 2 (solo recibe estado)
+  infracciones_replica2:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones_replica2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
+      IS_REPLICA: "true"  # Esta es una réplica
+    command: elixir --sname infracciones_replica2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
   rest:
@@ -100,4 +134,3 @@ services:
     user: "${DOCKER_UID}:${DOCKER_GID}"
     profiles:
       - testing
-

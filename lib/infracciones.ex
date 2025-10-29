@@ -10,57 +10,210 @@ end
 
 defmodule Libremarket.Infracciones.Server do
   @moduledoc """
-  Servidor de Infracciones
+  Servidor de Infracciones con Replicación Manual.
+
+  PRIMARIO (IS_REPLICA=false):
+  - Procesa mensajes AMQP
+  - Detecta infracciones (escrituras)
+  - Replica estado a las réplicas
+  - Responde lecturas
+
+  RÉPLICA (IS_REPLICA=true):
+  - NO procesa mensajes AMQP
+  - Solo recibe replicación de estado del primario
+  - Responde lecturas
   """
   use GenServer
   require Logger
 
-  @global_name {:global, __MODULE__}
+  @replication_interval 2_000
+
+  # Client API
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def detectar_infracciones(pid \\ @global_name, id_compra) do
-    GenServer.call(pid, {:detectar_infracciones, id_compra})
+  def detectar_infracciones(id_compra) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        {:error, :server_not_running}
+      _pid ->
+        GenServer.call(__MODULE__, {:detectar_infracciones, id_compra})
+    end
   end
 
-  def listar_infracciones(pid \\ @global_name) do
-    GenServer.call(pid, :listar_infracciones)
+  def listar_infracciones() do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        []
+      _pid ->
+        GenServer.call(__MODULE__, :listar_infracciones)
+    end
   end
+
+  def get_replication_info() do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        {:error, :server_not_running}
+      _pid ->
+        GenServer.call(__MODULE__, :get_replication_info)
+    end
+  end
+
+  # Server Callbacks
 
   @impl true
   def init(_state) do
-    Logger.info("Servidor de Infracciones iniciado")
-    {:ok, %{infracciones: []}}
+    is_replica = System.get_env("IS_REPLICA") == "true"
+
+    Logger.info("""
+    Servidor de Infracciones iniciado en nodo #{Node.self()}
+    Modo: #{if is_replica, do: "RÉPLICA (solo recibe estado)", else: "PRIMARIO (procesa mensajes)"}
+    """)
+
+    # Programar replicación periódica solo si somos primario
+    if not is_replica do
+      Process.send_after(self(), :replicate_state, @replication_interval)
+    end
+
+    {:ok, %{
+      infracciones: [],
+      replicated_from: nil,
+      last_replication: nil,
+      is_replica: is_replica
+    }}
   end
 
   @impl true
   def handle_call({:detectar_infracciones, id_compra}, _from, state) do
-    tiene_infraccion = Libremarket.Infracciones.detectar_infracciones()
+    # Solo el primario puede detectar infracciones
+    if state.is_replica do
+      Logger.warning("Intento de escritura en réplica - operación rechazada")
+      {:reply, {:error, :not_primary}, state}
+    else
+      tiene_infraccion = Libremarket.Infracciones.detectar_infracciones()
 
-    nuevo_state =
-      if tiene_infraccion do
-        nuevas_infracciones = [
-          %{id_compra: id_compra, timestamp: DateTime.utc_now()} | state.infracciones
-        ]
-        %{state | infracciones: nuevas_infracciones}
-      else
-        state
-      end
+      nuevo_state =
+        if tiene_infraccion do
+          nuevas_infracciones = [
+            %{id_compra: id_compra, timestamp: DateTime.utc_now(), node: Node.self()}
+            | state.infracciones
+          ]
 
-    {:reply, tiene_infraccion, nuevo_state}
+          # Replicar inmediatamente a las réplicas
+          spawn(fn -> replicate_to_replicas(nuevas_infracciones) end)
+
+          %{state | infracciones: nuevas_infracciones}
+        else
+          state
+        end
+
+      {:reply, tiene_infraccion, nuevo_state}
+    end
   end
 
   @impl true
   def handle_call(:listar_infracciones, _from, state) do
+    # Las lecturas pueden ejecutarse en cualquier nodo (primario o réplica)
     {:reply, state.infracciones, state}
+  end
+
+  @impl true
+  def handle_call(:get_replication_info, _from, state) do
+    info = %{
+      node: Node.self(),
+      is_replica: state.is_replica,
+      infracciones_count: length(state.infracciones),
+      replicated_from: state.replicated_from,
+      last_replication: state.last_replication
+    }
+    {:reply, info, state}
+  end
+
+  @impl true
+  def handle_call({:replicate_state, infracciones, from_node}, _from, state) do
+    # Las réplicas aceptan replicación
+    if state.is_replica do
+      Logger.info("Replicando estado desde primario #{from_node}: #{length(infracciones)} infracciones")
+
+      new_state = %{state |
+        infracciones: infracciones,
+        replicated_from: from_node,
+        last_replication: DateTime.utc_now()
+      }
+
+      {:reply, :ok, new_state}
+    else
+      # El primario no necesita recibir replicación
+      {:reply, {:error, :is_primary}, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:replicate_state, state) do
+    # Solo el primario replica
+    if not state.is_replica do
+      replicate_to_replicas(state.infracciones)
+    end
+
+    # Programar siguiente replicación solo si somos primario
+    if not state.is_replica do
+      Process.send_after(self(), :replicate_state, @replication_interval)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  # Private Functions
+
+  defp replicate_to_replicas(infracciones) do
+    replica_nodes = get_replica_nodes()
+
+    if Enum.empty?(replica_nodes) do
+      Logger.debug("No hay réplicas disponibles para replicar")
+    else
+      Logger.info("Replicando a #{length(replica_nodes)} réplicas")
+
+      Enum.each(replica_nodes, fn node ->
+        spawn(fn ->
+          try do
+            :rpc.call(node, GenServer, :call, [
+              __MODULE__,
+              {:replicate_state, infracciones, Node.self()}
+            ], 3_000)
+          catch
+            _, error ->
+              Logger.error("Error replicando a #{node}: #{inspect(error)}")
+          end
+        end)
+      end)
+    end
+  end
+
+  defp get_replica_nodes() do
+    # Obtener todos los nodos conectados
+    all_nodes = Node.list()
+
+    # Filtrar solo los nodos que tienen el servidor de infracciones
+    Enum.filter(all_nodes, fn node ->
+      # Verificar si el nodo tiene el proceso de infracciones
+      String.contains?(Atom.to_string(node), "infracciones")
+    end)
   end
 end
 
 defmodule Libremarket.Infracciones.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Infracciones
+  Consumer AMQP para el servicio de Infracciones.
+
+  IMPORTANTE: Este Consumer SOLO se inicia en el nodo PRIMARIO.
+  Las réplicas NO tienen Consumer y por lo tanto NO procesan mensajes AMQP.
   """
   use GenServer
   require Logger
@@ -70,6 +223,7 @@ defmodule Libremarket.Infracciones.Consumer do
   @queue "infracciones_queue"
 
   def start_link(opts \\ []) do
+    Logger.info("Iniciando Consumer de Infracciones - Este nodo procesará mensajes AMQP")
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -127,34 +281,39 @@ defmodule Libremarket.Infracciones.Consumer do
   end
 
   defp process_message(%{"request_type" => "detectar_infracciones", "compra_id" => compra_id, "producto_id" => producto_id}) do
-    Logger.info("Detectando infracciones para compra #{compra_id}, producto #{producto_id}")
+    Logger.info("Consumer procesando: detectar infracciones para compra #{compra_id}, producto #{producto_id}")
 
     tiene_infraccion = Libremarket.Infracciones.Server.detectar_infracciones(producto_id)
 
-    if tiene_infraccion do
-      # Publicar evento de infracción
-      Publisher.publish("infracciones.events", %{
-        "event_type" => "infraccion_detectada",
-        "compra_id" => compra_id,
-        "producto_id" => producto_id,
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+    case tiene_infraccion do
+      {:error, reason} ->
+        Logger.error("Error detectando infracciones: #{inspect(reason)}")
 
-      # Responder a compras
-      Publisher.publish("infracciones.responses", %{
-        "response_type" => "infraccion_detectada",
-        "compra_id" => compra_id,
-        "tiene_infraccion" => true,
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
-    else
-      # No hay infracción, continuar
-      Publisher.publish("infracciones.responses", %{
-        "response_type" => "sin_infraccion",
-        "compra_id" => compra_id,
-        "tiene_infraccion" => false,
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+      true ->
+        # Publicar evento de infracción
+        Publisher.publish("infracciones.events", %{
+          "event_type" => "infraccion_detectada",
+          "compra_id" => compra_id,
+          "producto_id" => producto_id,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+        # Responder a compras
+        Publisher.publish("infracciones.responses", %{
+          "response_type" => "infraccion_detectada",
+          "compra_id" => compra_id,
+          "tiene_infraccion" => true,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
+      false ->
+        # No hay infracción, continuar
+        Publisher.publish("infracciones.responses", %{
+          "response_type" => "sin_infraccion",
+          "compra_id" => compra_id,
+          "tiene_infraccion" => false,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
     end
   end
 

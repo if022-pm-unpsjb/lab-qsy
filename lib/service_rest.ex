@@ -29,6 +29,14 @@ defmodule Libremarket.ServiceRest do
     send_resp(conn, 200, Jason.encode!(compras))
   end
 
+    # Listar infracciones realizadas
+  get "/infracciones" do
+    infracciones = Libremarket.Infracciones.Server.listar_infracciones()
+
+    send_resp(conn, 200, Jason.encode!(infracciones))
+  end
+
+
   # Realizar una compra
   post "/comprar" do
     case conn.body_params do
