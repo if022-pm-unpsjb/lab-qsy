@@ -4,7 +4,7 @@ defmodule Libremarket.Infracciones do
   Detecta infracciones con 30% de probabilidad
   """
   def detectar_infracciones() do
-    :rand.uniform(100) <= 30
+    :rand.uniform(100) <= 50
   end
 end
 
@@ -135,7 +135,10 @@ defmodule Libremarket.Infracciones.Server do
   def handle_call({:replicate_state, infracciones, from_node}, _from, state) do
     # Las réplicas aceptan replicación
     if state.is_replica do
-      Logger.info("Replicando estado desde primario #{from_node}: #{length(infracciones)} infracciones")
+      # Solo loggear si hay infracciones para replicar
+      if length(infracciones) > 0 do
+        Logger.info("Replicando estado desde primario #{from_node}: #{length(infracciones)} infracciones")
+      end
 
       new_state = %{state |
         infracciones: infracciones,
@@ -175,21 +178,29 @@ defmodule Libremarket.Infracciones.Server do
   defp replicate_to_replicas(infracciones) do
     replica_nodes = get_replica_nodes()
 
-    if Enum.empty?(replica_nodes) do
-      Logger.debug("No hay réplicas disponibles para replicar")
-    else
-      Logger.info("Replicando a #{length(replica_nodes)} réplicas")
+    # Solo replicar y loggear si hay datos
+    if not Enum.empty?(replica_nodes) and length(infracciones) > 0 do
+      Logger.info("Replicando #{length(infracciones)} infracciones a #{length(replica_nodes)} réplicas")
 
       Enum.each(replica_nodes, fn node ->
         spawn(fn ->
           try do
-            :rpc.call(node, GenServer, :call, [
+            result = :rpc.call(node, GenServer, :call, [
               __MODULE__,
               {:replicate_state, infracciones, Node.self()}
             ], 3_000)
+
+            case result do
+              :ok ->
+                Logger.debug("✓ Replicación exitosa a #{node}")
+              {:error, reason} ->
+                Logger.error("Error en replicación a #{node}: #{inspect(reason)}")
+              other ->
+                Logger.warning("Respuesta inesperada de #{node}: #{inspect(other)}")
+            end
           catch
-            _, error ->
-              Logger.error("Error replicando a #{node}: #{inspect(error)}")
+            kind, error ->
+              Logger.error("Error replicando a #{node}: #{kind} - #{inspect(error)}")
           end
         end)
       end)
