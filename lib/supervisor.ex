@@ -28,6 +28,7 @@ defmodule Libremarket.Supervisor do
     # Servicios base (siempre activos)
     base_services = [
       {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
+      {Registry, keys: :unique, name: Libremarket.Registry},
       Libremarket.AMQP.Connection
     ]
 
@@ -65,20 +66,30 @@ defmodule Libremarket.Supervisor do
         ]
 
       "Elixir.Libremarket.Infracciones.Server" ->
-        is_replica = System.get_env("IS_REPLICA") == "true"
+        Logger.info("✓ Iniciando servicio de Infracciones con ZOOKEEPER")
 
-        if is_replica do
-          Logger.info("✓ Iniciando RÉPLICA de Infracciones (solo recibe estado, SIN Consumer)")
-          [
-            {Libremarket.Infracciones.Server, %{}}
-          ]
-        else
-          Logger.info("✓ Iniciando PRIMARIO de Infracciones (con Consumer AMQP)")
-          [
-            {Libremarket.Infracciones.Server, %{}},
-            Libremarket.Infracciones.Consumer
-          ]
+        # Callbacks para cuando el nodo se convierte en líder o seguidor
+        on_leader = fn ->
+          Logger.info("Callback: Promoviendo servidor a LÍDER")
+          Libremarket.Infracciones.Server.promote_to_leader()
         end
+
+        on_follower = fn ->
+          Logger.info("Callback: Degradando servidor a SEGUIDOR")
+          Libremarket.Infracciones.Server.demote_to_follower()
+        end
+
+        [
+          # Primero el servidor
+          {Libremarket.Infracciones.Server, %{}},
+          # Luego ZooKeeper leader election con callbacks
+          {Libremarket.ZookeeperLeader, [
+            service_name: :infracciones,
+            on_leader: on_leader,
+            on_follower: on_follower
+          ]}
+          # El Consumer se inicia/detiene dinámicamente según liderazgo
+        ]
 
       "Elixir.Libremarket.ServiceRest" ->
         Logger.info("Iniciando servicio REST API")

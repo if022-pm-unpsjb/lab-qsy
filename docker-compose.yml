@@ -1,6 +1,18 @@
 version: "3.8"
 
 services:
+  zookeeper:
+    image: zookeeper:3.8
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/data
+      - zookeeper-logs:/datalog
+
   ventas:
     image: elixir:1.15.7-alpine
     container_name: ventas
@@ -57,10 +69,9 @@ services:
     command: elixir --sname envios --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
-  # INFRACCIONES - PRIMARIO (procesa mensajes AMQP)
-  infracciones:
+  infracciones1:
     image: elixir:1.15.7-alpine
-    container_name: infracciones
+    container_name: infracciones1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -69,14 +80,16 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "false"  # Este es el primario
-    command: elixir --sname infracciones --cookie ${SECRET} -S mix run --no-halt --no-compile
+      ZOOKEEPER_HOST: "localhost:2181"   # <— recomendado
+      NODE_ID: "1"
+    command: elixir --sname infracciones1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
 
-  # INFRACCIONES - RÉPLICA 1 (solo recibe estado)
-  infracciones_replica1:
+  infracciones2:
     image: elixir:1.15.7-alpine
-    container_name: infracciones_replica1
+    container_name: infracciones2
     network_mode: "host"
     volumes:
       - ./:/app
@@ -85,14 +98,16 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "true"  # Esta es una réplica
-    command: elixir --sname infracciones_replica1 --cookie ${SECRET} -S mix run --no-halt --no-compile
+      ZOOKEEPER_HOST: "localhost:2181"   # <— recomendado
+      NODE_ID: "2"
+    command: elixir --sname infracciones2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
 
-  # INFRACCIONES - RÉPLICA 2 (solo recibe estado)
-  infracciones_replica2:
+  infracciones3:
     image: elixir:1.15.7-alpine
-    container_name: infracciones_replica2
+    container_name: infracciones3
     network_mode: "host"
     volumes:
       - ./:/app
@@ -101,9 +116,12 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "true"  # Esta es una réplica
-    command: elixir --sname infracciones_replica2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+      ZOOKEEPER_HOST: "localhost:2181"  # <— recomendado
+      NODE_ID: "3"
+    command: elixir --sname infracciones3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
 
   rest:
     image: elixir:1.15.7-alpine
@@ -134,3 +152,7 @@ services:
     user: "${DOCKER_UID}:${DOCKER_GID}"
     profiles:
       - testing
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:

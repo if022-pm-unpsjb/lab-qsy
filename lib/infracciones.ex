@@ -4,28 +4,23 @@ defmodule Libremarket.Infracciones do
   Detecta infracciones con 30% de probabilidad
   """
   def detectar_infracciones() do
-    :rand.uniform(100) <= 50
+    :rand.uniform(100) <= 30
   end
 end
 
 defmodule Libremarket.Infracciones.Server do
   @moduledoc """
-  Servidor de Infracciones con Replicación Manual.
+  Servidor de Infracciones con Replicación y ZooKeeper.
 
-  PRIMARIO (IS_REPLICA=false):
-  - Procesa mensajes AMQP
-  - Detecta infracciones (escrituras)
-  - Replica estado a las réplicas
-  - Responde lecturas
-
-  RÉPLICA (IS_REPLICA=true):
-  - NO procesa mensajes AMQP
-  - Solo recibe replicación de estado del primario
-  - Responde lecturas
+  - ZooKeeper determina quién es el líder
+  - Solo el líder procesa mensajes AMQP
+  - Todos los nodos pueden responder lecturas
+  - El líder replica a los seguidores
   """
   use GenServer
   require Logger
 
+  @service_name :infracciones
   @replication_interval 2_000
 
   # Client API
@@ -61,36 +56,38 @@ defmodule Libremarket.Infracciones.Server do
     end
   end
 
+  def promote_to_leader() do
+    GenServer.cast(__MODULE__, :promote_to_leader)
+  end
+
+  def demote_to_follower() do
+    GenServer.cast(__MODULE__, :demote_to_follower)
+  end
+
   # Server Callbacks
 
   @impl true
   def init(_state) do
-    is_replica = System.get_env("IS_REPLICA") == "true"
-
     Logger.info("""
     Servidor de Infracciones iniciado en nodo #{Node.self()}
-    Modo: #{if is_replica, do: "RÉPLICA (solo recibe estado)", else: "PRIMARIO (procesa mensajes)"}
+    Esperando elección de ZooKeeper...
     """)
-
-    # Programar replicación periódica solo si somos primario
-    if not is_replica do
-      Process.send_after(self(), :replicate_state, @replication_interval)
-    end
 
     {:ok, %{
       infracciones: [],
       replicated_from: nil,
       last_replication: nil,
-      is_replica: is_replica
+      is_leader: false,
+      consumer_pid: nil
     }}
   end
 
   @impl true
   def handle_call({:detectar_infracciones, id_compra}, _from, state) do
-    # Solo el primario puede detectar infracciones
-    if state.is_replica do
-      Logger.warning("Intento de escritura en réplica - operación rechazada")
-      {:reply, {:error, :not_primary}, state}
+    # Solo el líder puede detectar infracciones
+    if not state.is_leader do
+      Logger.warning("Intento de escritura en seguidor - operación rechazada")
+      {:reply, {:error, :not_leader}, state}
     else
       tiene_infraccion = Libremarket.Infracciones.detectar_infracciones()
 
@@ -101,8 +98,8 @@ defmodule Libremarket.Infracciones.Server do
             | state.infracciones
           ]
 
-          # Replicar inmediatamente a las réplicas
-          spawn(fn -> replicate_to_replicas(nuevas_infracciones) end)
+          # Replicar inmediatamente a los seguidores
+          spawn(fn -> replicate_to_followers(nuevas_infracciones) end)
 
           %{state | infracciones: nuevas_infracciones}
         else
@@ -115,7 +112,6 @@ defmodule Libremarket.Infracciones.Server do
 
   @impl true
   def handle_call(:listar_infracciones, _from, state) do
-    # Las lecturas pueden ejecutarse en cualquier nodo (primario o réplica)
     {:reply, state.infracciones, state}
   end
 
@@ -123,7 +119,7 @@ defmodule Libremarket.Infracciones.Server do
   def handle_call(:get_replication_info, _from, state) do
     info = %{
       node: Node.self(),
-      is_replica: state.is_replica,
+      is_leader: state.is_leader,
       infracciones_count: length(state.infracciones),
       replicated_from: state.replicated_from,
       last_replication: state.last_replication
@@ -133,11 +129,10 @@ defmodule Libremarket.Infracciones.Server do
 
   @impl true
   def handle_call({:replicate_state, infracciones, from_node}, _from, state) do
-    # Las réplicas aceptan replicación
-    if state.is_replica do
-      # Solo loggear si hay infracciones para replicar
+    # Los seguidores aceptan replicación
+    if not state.is_leader do
       if length(infracciones) > 0 do
-        Logger.info("Replicando estado desde primario #{from_node}: #{length(infracciones)} infracciones")
+        Logger.info("Replicando estado desde líder #{from_node}: #{length(infracciones)} infracciones")
       end
 
       new_state = %{state |
@@ -148,20 +143,40 @@ defmodule Libremarket.Infracciones.Server do
 
       {:reply, :ok, new_state}
     else
-      # El primario no necesita recibir replicación
-      {:reply, {:error, :is_primary}, state}
+      {:reply, {:error, :is_leader}, state}
     end
   end
 
   @impl true
-  def handle_info(:replicate_state, state) do
-    # Solo el primario replica
-    if not state.is_replica do
-      replicate_to_replicas(state.infracciones)
+  def handle_cast(:promote_to_leader, state) do
+    Logger.info("🎯 PROMOVIDO A LÍDER - Iniciando Consumer AMQP")
+
+    # Iniciar el Consumer AMQP
+    {:ok, consumer_pid} = Libremarket.Infracciones.Consumer.start_link([])
+
+    # Iniciar replicación periódica
+    Process.send_after(self(), :replicate_state, @replication_interval)
+
+    {:noreply, %{state | is_leader: true, consumer_pid: consumer_pid}}
+  end
+
+  @impl true
+  def handle_cast(:demote_to_follower, state) do
+    Logger.info("📋 DEGRADADO A SEGUIDOR - Deteniendo Consumer AMQP")
+
+    # Detener el Consumer AMQP si existe
+    if state.consumer_pid && Process.alive?(state.consumer_pid) do
+      Process.exit(state.consumer_pid, :normal)
     end
 
-    # Programar siguiente replicación solo si somos primario
-    if not state.is_replica do
+    {:noreply, %{state | is_leader: false, consumer_pid: nil}}
+  end
+
+  @impl true
+  def handle_info(:replicate_state, state) do
+    # Solo el líder replica
+    if state.is_leader do
+      replicate_to_followers(state.infracciones)
       Process.send_after(self(), :replicate_state, @replication_interval)
     end
 
@@ -175,14 +190,13 @@ defmodule Libremarket.Infracciones.Server do
 
   # Private Functions
 
-  defp replicate_to_replicas(infracciones) do
-    replica_nodes = get_replica_nodes()
+  defp replicate_to_followers(infracciones) do
+    follower_nodes = get_follower_nodes()
 
-    # Solo replicar y loggear si hay datos
-    if not Enum.empty?(replica_nodes) and length(infracciones) > 0 do
-      Logger.info("Replicando #{length(infracciones)} infracciones a #{length(replica_nodes)} réplicas")
+    if not Enum.empty?(follower_nodes) and length(infracciones) > 0 do
+      Logger.info("Replicando #{length(infracciones)} infracciones a #{length(follower_nodes)} seguidores")
 
-      Enum.each(replica_nodes, fn node ->
+      Enum.each(follower_nodes, fn node ->
         spawn(fn ->
           try do
             result = :rpc.call(node, GenServer, :call, [
@@ -207,13 +221,10 @@ defmodule Libremarket.Infracciones.Server do
     end
   end
 
-  defp get_replica_nodes() do
-    # Obtener todos los nodos conectados
+  defp get_follower_nodes() do
     all_nodes = Node.list()
 
-    # Filtrar solo los nodos que tienen el servidor de infracciones
     Enum.filter(all_nodes, fn node ->
-      # Verificar si el nodo tiene el proceso de infracciones
       String.contains?(Atom.to_string(node), "infracciones")
     end)
   end
@@ -223,8 +234,8 @@ defmodule Libremarket.Infracciones.Consumer do
   @moduledoc """
   Consumer AMQP para el servicio de Infracciones.
 
-  IMPORTANTE: Este Consumer SOLO se inicia en el nodo PRIMARIO.
-  Las réplicas NO tienen Consumer y por lo tanto NO procesan mensajes AMQP.
+  IMPORTANTE: Este Consumer se inicia/detiene dinámicamente según
+  si el nodo es líder o seguidor (determinado por ZooKeeper).
   """
   use GenServer
   require Logger
@@ -234,7 +245,7 @@ defmodule Libremarket.Infracciones.Consumer do
   @queue "infracciones_queue"
 
   def start_link(opts \\ []) do
-    Logger.info("Iniciando Consumer de Infracciones - Este nodo procesará mensajes AMQP")
+    Logger.info("Iniciando Consumer de Infracciones - Este nodo es LÍDER")
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -301,7 +312,6 @@ defmodule Libremarket.Infracciones.Consumer do
         Logger.error("Error detectando infracciones: #{inspect(reason)}")
 
       true ->
-        # Publicar evento de infracción
         Publisher.publish("infracciones.events", %{
           "event_type" => "infraccion_detectada",
           "compra_id" => compra_id,
@@ -309,7 +319,6 @@ defmodule Libremarket.Infracciones.Consumer do
           "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
         })
 
-        # Responder a compras
         Publisher.publish("infracciones.responses", %{
           "response_type" => "infraccion_detectada",
           "compra_id" => compra_id,
@@ -318,7 +327,6 @@ defmodule Libremarket.Infracciones.Consumer do
         })
 
       false ->
-        # No hay infracción, continuar
         Publisher.publish("infracciones.responses", %{
           "response_type" => "sin_infraccion",
           "compra_id" => compra_id,
