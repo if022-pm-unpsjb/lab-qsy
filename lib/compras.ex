@@ -1,12 +1,14 @@
 defmodule Libremarket.Compras.Server do
   @moduledoc """
-  Servidor de Compras - Orquesta el flujo de compra mediante mensajes AMQP
+  Servidor de Compras - Orquesta el flujo de compra mediante mensajes AMQP con elección de líder
   """
   use GenServer
   require Logger
   alias Libremarket.AMQP.Publisher
 
   @global_name {:global, __MODULE__}
+  @service_name "compras"
+  @replication_interval 2_000
 
   defp atomizar_keys(map) when is_map(map) do
   Map.new(map, fn {k, v} ->
@@ -16,6 +18,10 @@ end
 
   def start_link(opts \\ %{}) do
     GenServer.start_link(__MODULE__, opts, name: @global_name)
+  end
+
+  def is_leader?() do
+    Libremarket.ZookeeperLeader.is_leader?(@service_name)
   end
 
   def comprar(pid \\ @global_name, producto_id, medio_pago, forma_entrega) do
@@ -29,7 +35,16 @@ end
   @impl true
   def init(state) do
     Logger.info("Servidor de Compras iniciado")
-    {:ok, Map.merge(state, %{compras_en_proceso: %{}, compras_realizadas: []})}
+    Logger.info("Esperando elección de líder mediante Zookeeper...")
+
+    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+      service_name: @service_name,
+      on_leader_change: &handle_leader_change/1
+    )
+
+    Process.send_after(self(), :replicate_state, @replication_interval)
+
+    {:ok, Map.merge(state, %{compras_en_proceso: %{}, compras_realizadas: [], is_leader: false})}
   end
 
   @impl true
@@ -310,11 +325,84 @@ end
         {:noreply, nuevo_state}
     end
   end
+
+  @impl true
+  def handle_cast({:replicate_state, compras_en_proceso, compras_realizadas, from_node}, state) do
+    if not state.is_leader do
+      Logger.info("Replicando estado desde líder #{from_node}")
+      new_state = %{state |
+        compras_en_proceso: compras_en_proceso,
+        compras_realizadas: compras_realizadas
+      }
+      {:noreply, new_state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:leader_change, is_leader}, state) do
+    Logger.info("""
+    [Compras] Cambio de liderazgo
+    Nodo: #{Node.self()}
+    Es líder: #{is_leader}
+    """)
+    {:noreply, %{state | is_leader: is_leader}}
+  end
+
+  @impl true
+  def handle_info(:replicate_state, state) do
+    if state.is_leader do
+      replicate_to_followers(state.compras_en_proceso, state.compras_realizadas)
+    end
+
+    Process.send_after(self(), :replicate_state, @replication_interval)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  defp handle_leader_change(is_leader) do
+    case :global.whereis_name(__MODULE__) do
+      :undefined -> :ok
+      pid -> send(pid, {:leader_change, is_leader})
+    end
+  end
+
+  defp replicate_to_followers(compras_en_proceso, compras_realizadas) do
+    follower_nodes = get_follower_nodes()
+
+    if not Enum.empty?(follower_nodes) do
+      Enum.each(follower_nodes, fn node ->
+        spawn(fn ->
+          try do
+            :rpc.call(node, GenServer, :cast, [
+              {:global, __MODULE__},
+              {:replicate_state, compras_en_proceso, compras_realizadas, Node.self()}
+            ], 3_000)
+          catch
+            kind, error ->
+              Logger.error("Error replicando a #{node}: #{kind} - #{inspect(error)}")
+          end
+        end)
+      end)
+    end
+  end
+
+  defp get_follower_nodes() do
+    all_nodes = Node.list()
+    Enum.filter(all_nodes, fn node ->
+      String.contains?(Atom.to_string(node), "compras")
+    end)
+  end
 end
 
 defmodule Libremarket.Compras.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Compras.
+  Consumer AMQP para el servicio de Compras con elección de líder.
   Escucha respuestas de otros servicios y coordina el flujo.
   """
   use GenServer
@@ -323,6 +411,7 @@ defmodule Libremarket.Compras.Consumer do
 
   @exchange "libremarket_exchange"
   @queue "compras_queue"
+  @check_leader_interval 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -330,17 +419,39 @@ defmodule Libremarket.Compras.Consumer do
 
   @impl true
   def init(_opts) do
-    send(self(), :setup)
-    {:ok, %{}}
+    send(self(), :check_leadership)
+    {:ok, %{channel: nil, consumer_tag: nil, is_consuming: false}}
+  end
+
+  @impl true
+  def handle_info(:check_leadership, state) do
+    is_leader = Libremarket.Compras.Server.is_leader?()
+    
+    new_state = 
+      cond do
+        is_leader and not state.is_consuming ->
+          Logger.info("[Consumer Compras] Este nodo es LÍDER, iniciando consumo de mensajes")
+          start_consuming(state)
+        
+        not is_leader and state.is_consuming ->
+          Logger.info("[Consumer Compras] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          stop_consuming(state)
+        
+        true ->
+          state
+      end
+    
+    Process.send_after(self(), :check_leadership, @check_leader_interval)
+    {:noreply, new_state}
   end
 
   @impl true
   def handle_info(:setup, state) do
     with {:ok, channel} <- Connection.get_channel(),
          :ok <- setup_queue(channel),
-         {:ok, _consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
+         {:ok, consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
       Logger.info("Consumer de Compras iniciado en cola: #{@queue}")
-      {:noreply, Map.put(state, :channel, channel)}
+      {:noreply, %{state | channel: channel, consumer_tag: consumer_tag, is_consuming: true}}
     else
       error ->
         Logger.error("Error configurando consumer de Compras: #{inspect(error)}")
@@ -439,5 +550,22 @@ defmodule Libremarket.Compras.Consumer do
     with {:ok, channel} <- Connection.get_channel() do
       AMQP.Basic.nack(channel, meta.delivery_tag, requeue: false)
     end
+  end
+
+  defp start_consuming(state) do
+    send(self(), :setup)
+    state
+  end
+
+  defp stop_consuming(state) do
+    if state.channel && state.consumer_tag do
+      try do
+        AMQP.Basic.cancel(state.channel, state.consumer_tag)
+        Logger.info("[Consumer Compras] Consumo detenido")
+      catch
+        _, _ -> :ok
+      end
+    end
+    %{state | is_consuming: false, consumer_tag: nil}
   end
 end

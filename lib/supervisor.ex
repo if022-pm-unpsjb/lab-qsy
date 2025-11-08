@@ -17,16 +17,16 @@ defmodule Libremarket.Supervisor do
         config: [
           port: 45892,
           if_addr: "0.0.0.0",
-          multicast_addr: "230.1.1.251",
-          multicast_ttl: 1,
-          broadcast_only: false,
-          secret: "libremarket_secret"
+          multicast_addr: "127.0.0.1",
+          broadcast_only: true,
+          secret: "secret"
         ]
       ]
     ]
 
     # Servicios base (siempre activos)
     base_services = [
+      {Registry, keys: :unique, name: Libremarket.Registry},
       {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
       Libremarket.AMQP.Connection
     ]
@@ -37,48 +37,39 @@ defmodule Libremarket.Supervisor do
         []
 
       "Elixir.Libremarket.Ventas.Server" ->
-        Logger.info("Iniciando servicio de Ventas con Consumer")
+        Logger.info("✓ Iniciando nodo de Ventas con elección de líder (Zookeeper)")
         [
           {Libremarket.Ventas.Server, %{}},
           Libremarket.Ventas.Consumer
         ]
 
       "Elixir.Libremarket.Compras.Server" ->
-        Logger.info("Iniciando servicio de Compras con Consumer")
+        Logger.info("✓ Iniciando nodo de Compras con elección de líder (Zookeeper)")
         [
           {Libremarket.Compras.Server, %{}},
           Libremarket.Compras.Consumer
         ]
 
       "Elixir.Libremarket.Pagos.Server" ->
-        Logger.info("Iniciando servicio de Pagos con Consumer")
+        Logger.info("✓ Iniciando nodo de Pagos con elección de líder (Zookeeper)")
         [
           {Libremarket.Pagos.Server, %{}},
           Libremarket.Pagos.Consumer
         ]
 
       "Elixir.Libremarket.Envios.Server" ->
-        Logger.info("Iniciando servicio de Envíos con Consumer")
+        Logger.info("✓ Iniciando nodo de Envíos con elección de líder (Zookeeper)")
         [
           {Libremarket.Envios.Server, %{}},
           Libremarket.Envios.Consumer
         ]
 
       "Elixir.Libremarket.Infracciones.Server" ->
-        is_replica = System.get_env("IS_REPLICA") == "true"
-
-        if is_replica do
-          Logger.info("✓ Iniciando RÉPLICA de Infracciones (solo recibe estado, SIN Consumer)")
-          [
-            {Libremarket.Infracciones.Server, %{}}
-          ]
-        else
-          Logger.info("✓ Iniciando PRIMARIO de Infracciones (con Consumer AMQP)")
-          [
-            {Libremarket.Infracciones.Server, %{}},
-            Libremarket.Infracciones.Consumer
-          ]
-        end
+        Logger.info("Iniciando nodo de Infracciones con elección de líder (Zookeeper)")
+        [
+          {Libremarket.Infracciones.Server, %{}},
+          Libremarket.Infracciones.Consumer
+        ]
 
       "Elixir.Libremarket.ServiceRest" ->
         Logger.info("Iniciando servicio REST API")

@@ -6,15 +6,20 @@ end
 
 defmodule Libremarket.Envios.Server do
   @moduledoc """
-  Servidor de Envíos
+  Servidor de Envíos con elección de líder
   """
   use GenServer
   require Logger
 
   @global_name {:global, __MODULE__}
+  @service_name "envios"
 
   def start_link(opts \\ %{}) do
     GenServer.start_link(__MODULE__, opts, name: @global_name)
+  end
+
+  def is_leader?() do
+    Libremarket.ZookeeperLeader.is_leader?(@service_name)
   end
 
   def procesarEnvio(pid \\ @global_name, idCompra, forma_entrega) do
@@ -28,7 +33,14 @@ defmodule Libremarket.Envios.Server do
   @impl true
   def init(_opts) do
     Logger.info("Servidor de Envíos iniciado")
-    {:ok, %{}}
+    Logger.info("Esperando elección de líder mediante Zookeeper...")
+
+    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+      service_name: @service_name,
+      on_leader_change: &handle_leader_change/1
+    )
+
+    {:ok, %{is_leader: false}}
   end
 
   @impl true
@@ -47,11 +59,33 @@ defmodule Libremarket.Envios.Server do
   def handle_call(:listarEnvios, _from, state) do
     {:reply, state, state}
   end
+
+  @impl true
+  def handle_info({:leader_change, is_leader}, state) do
+    Logger.info("""
+    [Envios] Cambio de liderazgo
+    Nodo: #{Node.self()}
+    Es líder: #{is_leader}
+    """)
+    {:noreply, %{state | is_leader: is_leader}}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  defp handle_leader_change(is_leader) do
+    case :global.whereis_name(__MODULE__) do
+      :undefined -> :ok
+      pid -> send(pid, {:leader_change, is_leader})
+    end
+  end
 end
 
 defmodule Libremarket.Envios.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Envíos
+  Consumer AMQP para el servicio de Envíos con elección de líder
   """
   use GenServer
   require Logger
@@ -59,6 +93,7 @@ defmodule Libremarket.Envios.Consumer do
 
   @exchange "libremarket_exchange"
   @queue "envios_queue"
+  @check_leader_interval 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -66,17 +101,39 @@ defmodule Libremarket.Envios.Consumer do
 
   @impl true
   def init(_opts) do
-    send(self(), :setup)
-    {:ok, %{}}
+    send(self(), :check_leadership)
+    {:ok, %{channel: nil, consumer_tag: nil, is_consuming: false}}
+  end
+
+  @impl true
+  def handle_info(:check_leadership, state) do
+    is_leader = Libremarket.Envios.Server.is_leader?()
+    
+    new_state = 
+      cond do
+        is_leader and not state.is_consuming ->
+          Logger.info("[Consumer Envios] Este nodo es LÍDER, iniciando consumo de mensajes")
+          start_consuming(state)
+        
+        not is_leader and state.is_consuming ->
+          Logger.info("[Consumer Envios] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          stop_consuming(state)
+        
+        true ->
+          state
+      end
+    
+    Process.send_after(self(), :check_leadership, @check_leader_interval)
+    {:noreply, new_state}
   end
 
   @impl true
   def handle_info(:setup, state) do
     with {:ok, channel} <- Connection.get_channel(),
          :ok <- setup_queue(channel),
-         {:ok, _consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
+         {:ok, consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
       Logger.info("Consumer de Envíos iniciado en cola: #{@queue}")
-      {:noreply, Map.put(state, :channel, channel)}
+      {:noreply, %{state | channel: channel, consumer_tag: consumer_tag, is_consuming: true}}
     else
       error ->
         Logger.error("Error configurando consumer de Envíos: #{inspect(error)}")
@@ -161,5 +218,22 @@ defmodule Libremarket.Envios.Consumer do
     with {:ok, channel} <- Connection.get_channel() do
       AMQP.Basic.nack(channel, meta.delivery_tag, requeue: false)
     end
+  end
+
+  defp start_consuming(state) do
+    send(self(), :setup)
+    state
+  end
+
+  defp stop_consuming(state) do
+    if state.channel && state.consumer_tag do
+      try do
+        AMQP.Basic.cancel(state.channel, state.consumer_tag)
+        Logger.info("[Consumer Envios] Consumo detenido")
+      catch
+        _, _ -> :ok
+      end
+    end
+    %{state | is_consuming: false, consumer_tag: nil}
   end
 end

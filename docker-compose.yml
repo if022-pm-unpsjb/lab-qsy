@@ -1,9 +1,26 @@
 version: "3.8"
 
 services:
-  ventas:
+  zookeeper:
+    image: zookeeper:3.9
+    container_name: zookeeper
+    network_mode: "host"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=0.0.0.0:2888:3888;2181
+      ZOO_TICK_TIME: 2000
+      ZOO_INIT_LIMIT: 10
+      ZOO_SYNC_LIMIT: 5
+    ports:
+      - "2181:2181"
+      - "2888:2888"
+      - "3888:3888"
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  ventas1:
     image: elixir:1.15.7-alpine
-    container_name: ventas
+    container_name: ventas1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -12,12 +29,34 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
-    command: elixir --sname ventas --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname ventas1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  compras:
+  ventas2:
     image: elixir:1.15.7-alpine
-    container_name: compras
+    container_name: ventas2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
+    command: elixir --sname ventas2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  compras1:
+    image: elixir:1.15.7-alpine
+    container_name: compras1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -26,12 +65,34 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
-    command: elixir --sname compras --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname compras1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  pagos:
+  compras2:
     image: elixir:1.15.7-alpine
-    container_name: pagos
+    container_name: compras2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
+    command: elixir --sname compras2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  pagos1:
+    image: elixir:1.15.7-alpine
+    container_name: pagos1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -40,12 +101,34 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
-    command: elixir --sname pagos --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname pagos1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  envios:
+  pagos2:
     image: elixir:1.15.7-alpine
-    container_name: envios
+    container_name: pagos2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
+    command: elixir --sname pagos2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  envios1:
+    image: elixir:1.15.7-alpine
+    container_name: envios1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -54,13 +137,35 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
-    command: elixir --sname envios --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname envios1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  # INFRACCIONES - PRIMARIO (procesa mensajes AMQP)
-  infracciones:
+  envios2:
     image: elixir:1.15.7-alpine
-    container_name: infracciones
+    container_name: envios2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
+    command: elixir --sname envios2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  # INFRACCIONES - NODO 1 (participa en elección de líder)
+  infracciones1:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -69,14 +174,17 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "false"  # Este es el primario
-    command: elixir --sname infracciones --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname infracciones1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  # INFRACCIONES - RÉPLICA 1 (solo recibe estado)
-  infracciones_replica1:
+  # INFRACCIONES - NODO 2 (participa en elección de líder)
+  infracciones2:
     image: elixir:1.15.7-alpine
-    container_name: infracciones_replica1
+    container_name: infracciones2
     network_mode: "host"
     volumes:
       - ./:/app
@@ -85,14 +193,17 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "true"  # Esta es una réplica
-    command: elixir --sname infracciones_replica1 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname infracciones2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
-  # INFRACCIONES - RÉPLICA 2 (solo recibe estado)
-  infracciones_replica2:
+  # INFRACCIONES - NODO 3 (participa en elección de líder)
+  infracciones3:
     image: elixir:1.15.7-alpine
-    container_name: infracciones_replica2
+    container_name: infracciones3
     network_mode: "host"
     volumes:
       - ./:/app
@@ -101,9 +212,12 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-      IS_REPLICA: "true"  # Esta es una réplica
-    command: elixir --sname infracciones_replica2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname infracciones3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
   rest:
     image: elixir:1.15.7-alpine
@@ -118,6 +232,8 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.ServiceRest
     command: elixir --sname rest --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
+    mem_limit: 512m
+    memswap_limit: 512m
 
   simulador:
     image: elixir:1.15.7-alpine
@@ -134,3 +250,5 @@ services:
     user: "${DOCKER_UID}:${DOCKER_GID}"
     profiles:
       - testing
+    mem_limit: 512m
+    memswap_limit: 512m

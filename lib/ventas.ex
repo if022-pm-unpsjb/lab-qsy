@@ -65,15 +65,20 @@ end
 
 defmodule Libremarket.Ventas.Server do
   @moduledoc """
-  Servidor de Ventas - Maneja productos y stock
+  Servidor de Ventas - Maneja productos y stock con elección de líder
   """
   use GenServer
   require Logger
 
   @global_name {:global, __MODULE__}
+  @service_name "ventas"
 
   def start_link(opts \\ %{}) do
     GenServer.start_link(__MODULE__, opts, name: @global_name)
+  end
+
+  def is_leader?() do
+    Libremarket.ZookeeperLeader.is_leader?(@service_name)
   end
 
   def verificar_producto(pid \\ @global_name, producto_id) do
@@ -96,7 +101,14 @@ defmodule Libremarket.Ventas.Server do
   def init(_state) do
     productos = Libremarket.Ventas.generar_productos_iniciales()
     Logger.info("Servidor de Ventas iniciado con #{map_size(productos)} productos")
-    {:ok, %{productos: productos, ventas: []}}
+    Logger.info("Esperando elección de líder mediante Zookeeper...")
+
+    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+      service_name: @service_name,
+      on_leader_change: &handle_leader_change/1
+    )
+
+    {:ok, %{productos: productos, ventas: [], is_leader: false}}
   end
 
   @impl true
@@ -135,12 +147,34 @@ defmodule Libremarket.Ventas.Server do
     Logger.info("Stock repuesto para producto #{producto_id}")
     {:noreply, nuevo_state}
   end
+
+  @impl true
+  def handle_info({:leader_change, is_leader}, state) do
+    Logger.info("""
+    [Ventas] Cambio de liderazgo
+    Nodo: #{Node.self()}
+    Es líder: #{is_leader}
+    """)
+    {:noreply, %{state | is_leader: is_leader}}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  defp handle_leader_change(is_leader) do
+    case :global.whereis_name(__MODULE__) do
+      :undefined -> :ok
+      pid -> send(pid, {:leader_change, is_leader})
+    end
+  end
 end
 
 defmodule Libremarket.Ventas.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Ventas.
-  Escucha requests de verificación/confirmación de ventas y reposición de stock.
+  Consumer AMQP para el servicio de Ventas con elección de líder.
+  Solo procesa mensajes cuando el nodo es líder.
   """
   use GenServer
   require Logger
@@ -148,6 +182,7 @@ defmodule Libremarket.Ventas.Consumer do
 
   @exchange "libremarket_exchange"
   @queue "ventas_queue"
+  @check_leader_interval 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -155,17 +190,39 @@ defmodule Libremarket.Ventas.Consumer do
 
   @impl true
   def init(_opts) do
-    send(self(), :setup)
-    {:ok, %{}}
+    send(self(), :check_leadership)
+    {:ok, %{channel: nil, consumer_tag: nil, is_consuming: false}}
+  end
+
+  @impl true
+  def handle_info(:check_leadership, state) do
+    is_leader = Libremarket.Ventas.Server.is_leader?()
+    
+    new_state = 
+      cond do
+        is_leader and not state.is_consuming ->
+          Logger.info("[Consumer Ventas] Este nodo es LÍDER, iniciando consumo de mensajes")
+          start_consuming(state)
+        
+        not is_leader and state.is_consuming ->
+          Logger.info("[Consumer Ventas] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          stop_consuming(state)
+        
+        true ->
+          state
+      end
+    
+    Process.send_after(self(), :check_leadership, @check_leader_interval)
+    {:noreply, new_state}
   end
 
   @impl true
   def handle_info(:setup, state) do
     with {:ok, channel} <- Connection.get_channel(),
          :ok <- setup_queue(channel),
-         {:ok, _consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
+         {:ok, consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
       Logger.info("Consumer de Ventas iniciado en cola: #{@queue}")
-      {:noreply, Map.put(state, :channel, channel)}
+      {:noreply, %{state | channel: channel, consumer_tag: consumer_tag, is_consuming: true}}
     else
       error ->
         Logger.error("Error configurando consumer de Ventas: #{inspect(error)}")
@@ -304,5 +361,22 @@ defmodule Libremarket.Ventas.Consumer do
     with {:ok, channel} <- Connection.get_channel() do
       AMQP.Basic.nack(channel, meta.delivery_tag, requeue: false)
     end
+  end
+
+  defp start_consuming(state) do
+    send(self(), :setup)
+    state
+  end
+
+  defp stop_consuming(state) do
+    if state.channel && state.consumer_tag do
+      try do
+        AMQP.Basic.cancel(state.channel, state.consumer_tag)
+        Logger.info("[Consumer Ventas] Consumo detenido")
+      catch
+        _, _ -> :ok
+      end
+    end
+    %{state | is_consuming: false, consumer_tag: nil}
   end
 end
