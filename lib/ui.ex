@@ -10,7 +10,7 @@ defmodule Libremarket.Ui do
       compra_id = "compra_#{:rand.uniform(100000)}"
 
       Task.start(fn ->
-        Libremarket.Compras.Server.comprar(producto_id, medio_pago, forma_entrega)
+        call_compras_server(:comprar, [producto_id, medio_pago, forma_entrega])
       end)
 
       {:ok, %{
@@ -28,7 +28,7 @@ defmodule Libremarket.Ui do
   def comprar(producto_id, forma_entrega, medio_pago) do
     try do
       # Compra síncrona con timeout mayor
-      Libremarket.Compras.Server.comprar(producto_id, medio_pago, forma_entrega)
+      call_compras_server(:comprar, [producto_id, medio_pago, forma_entrega])
     rescue
       error ->
         IO.puts("Error comunicándose con servicio de compras: #{inspect(error)}")
@@ -43,7 +43,7 @@ defmodule Libremarket.Ui do
 
   def listar_productos() do
     try do
-      Libremarket.Ventas.Server.listar_productos()
+      call_ventas_server(:listar_productos, [])
     rescue
       error ->
         IO.puts("Error obteniendo productos: #{inspect(error)}")
@@ -96,7 +96,7 @@ defmodule Libremarket.Ui do
     IO.puts("\nResultado: #{activos}/#{total} servicios activos")
 
     if activos < total do
-      IO.puts("\nAlgunos servicios no están corriendo")   
+      IO.puts("\nAlgunos servicios no están corriendo")
     end
 
     {activos, total}
@@ -104,7 +104,7 @@ defmodule Libremarket.Ui do
 
   def listar_compras() do
     try do
-      GenServer.call({:global, Libremarket.Compras.Server}, :listar_compras)
+      call_compras_server(:listar_compras, [])
     rescue
       error ->
         IO.puts("Error obteniendo compras: #{inspect(error)}")
@@ -129,6 +129,37 @@ defmodule Libremarket.Ui do
         IO.puts("  Costo de envío: $#{compra.envio.costo}")
         IO.puts("  Timestamp: #{compra.timestamp}")
       end)
+    end
+  end
+
+  # Funciones privadas para llamar a servicios remotos
+
+  defp call_compras_server(function, args) do
+    compras_nodes = Node.list() |> Enum.filter(&String.contains?(to_string(&1), "compras"))
+
+    # Intentar con cada nodo de compras
+    Enum.find_value(compras_nodes, {:error, :no_compras_node}, fn node ->
+      try do
+        result = :rpc.call(node, Libremarket.Compras.Server, function, args, 15000)
+        case result do
+          {:badrpc, _} -> nil
+          result -> result
+        end
+      catch
+        _, _ -> nil
+      end
+    end)
+  end
+
+  defp call_ventas_server(function, args) do
+    ventas_nodes = Node.list() |> Enum.filter(&String.contains?(to_string(&1), "ventas"))
+
+    # Intentar con el primer nodo de ventas
+    case ventas_nodes do
+      [node | _] ->
+        :rpc.call(node, Libremarket.Ventas.Server, function, args, 5000)
+      [] ->
+        {:error, :no_ventas_node}
     end
   end
 end

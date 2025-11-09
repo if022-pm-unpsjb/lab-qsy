@@ -24,7 +24,7 @@ defmodule Libremarket.ServiceRest do
   # Listar compras realizadas
   get "/compras" do
     compras =
-      GenServer.call({:global, Libremarket.Compras.Server}, :listar_compras)
+      GenServer.call(Libremarket.Compras.Server, :listar_compras)
 
     send_resp(conn, 200, Jason.encode!(compras))
   end

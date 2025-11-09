@@ -76,9 +76,17 @@ defmodule Libremarket.Envios.Server do
   end
 
   defp handle_leader_change(is_leader) do
-    case :global.whereis_name(__MODULE__) do
-      :undefined -> :ok
-      pid -> send(pid, {:leader_change, is_leader})
+    pid = :global.whereis_name(__MODULE__)
+
+    Logger.debug("[Envios] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
+
+    case pid do
+      :undefined ->
+        Logger.warning("[Envios] No se encontró el proceso registrado globalmente")
+        :ok
+      pid when is_pid(pid) ->
+        Logger.debug("[Envios] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
+        send(pid, {:leader_change, is_leader})
     end
   end
 end
@@ -108,21 +116,21 @@ defmodule Libremarket.Envios.Consumer do
   @impl true
   def handle_info(:check_leadership, state) do
     is_leader = Libremarket.Envios.Server.is_leader?()
-    
-    new_state = 
+
+    new_state =
       cond do
         is_leader and not state.is_consuming ->
           Logger.info("[Consumer Envios] Este nodo es LÍDER, iniciando consumo de mensajes")
           start_consuming(state)
-        
+
         not is_leader and state.is_consuming ->
           Logger.info("[Consumer Envios] Este nodo ya NO es líder, deteniendo consumo de mensajes")
           stop_consuming(state)
-        
+
         true ->
           state
       end
-    
+
     Process.send_after(self(), :check_leadership, @check_leader_interval)
     {:noreply, new_state}
   end

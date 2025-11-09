@@ -1,14 +1,14 @@
 defmodule Libremarket.ZookeeperLeader do
   @moduledoc """
   Cliente Zookeeper para elección de líder distribuido.
-  
+
   Utiliza Zookeeper para coordinar la elección de líder entre múltiples nodos
   de un mismo servicio. Solo el líder procesará mensajes AMQP.
   """
   use GenServer
   require Logger
 
-  @zk_hosts [{'zookeeper', 2181}]
+  @zk_hosts [{'localhost', 2181}]
   @session_timeout 10_000
   @election_path "/libremarket/leader"
 
@@ -29,9 +29,9 @@ defmodule Libremarket.ZookeeperLeader do
   def start_link(opts) do
     service_name = Keyword.fetch!(opts, :service_name)
     on_leader_change = Keyword.get(opts, :on_leader_change)
-    
-    GenServer.start_link(__MODULE__, 
-      %{service_name: service_name, on_leader_change: on_leader_change}, 
+
+    GenServer.start_link(__MODULE__,
+      %{service_name: service_name, on_leader_change: on_leader_change},
       name: via_tuple(service_name))
   end
 
@@ -56,7 +56,7 @@ defmodule Libremarket.ZookeeperLeader do
   @impl true
   def init(%{service_name: service_name, on_leader_change: on_leader_change}) do
     node_id = "#{service_name}_#{Node.self()}_#{:erlang.unique_integer([:positive])}"
-    
+
     Logger.info("""
     [ZK Leader] Iniciando elección de líder para servicio: #{service_name}
     Node ID: #{node_id}
@@ -116,17 +116,14 @@ defmodule Libremarket.ZookeeperLeader do
   @impl true
   def handle_info(:participate_in_election, state) do
     service_path = "#{@election_path}/#{state.service_name}"
-    
+
     # Crear el path base si no existe
     ensure_path_exists(state.pid, service_path)
 
     # Crear nodo efímero secuencial para la elección
     election_node_path = "#{service_path}/node-"
-    
-    case :erlzk.create(state.pid, election_node_path, state.node_id, [
-      :ephemeral,
-      :sequence
-    ]) do
+
+    case :erlzk.create(state.pid, election_node_path, state.node_id, :ephemeral_sequential) do
       {:ok, created_path} ->
         Logger.info("[ZK Leader] Nodo de elección creado: #{created_path}")
         new_state = %{state | election_node: created_path}
@@ -143,15 +140,34 @@ defmodule Libremarket.ZookeeperLeader do
   @impl true
   def handle_info(:check_leadership, state) do
     service_path = "#{@election_path}/#{state.service_name}"
-    
+
     case :erlzk.get_children(state.pid, service_path, self()) do
       {:ok, children} ->
-        sorted_children = Enum.sort(children)
+        # Convertir charlists de Erlang a strings de Elixir
+        sorted_children = children
+          |> Enum.map(&to_string/1)
+          |> Enum.sort()
+
         my_node = Path.basename(state.election_node)
-        
-        is_leader = List.first(sorted_children) == my_node
-        
-        if is_leader != state.is_leader do
+        first_node = List.first(sorted_children)
+
+        is_leader = first_node == my_node
+
+        # DEBUG: Ver qué está pasando
+        Logger.debug("""
+        [ZK Leader DEBUG] Verificando liderazgo
+        Mi nodo (#{inspect(my_node)}): #{my_node}
+        Primer nodo (#{inspect(first_node)}): #{first_node}
+        Comparación: #{inspect(first_node)} == #{inspect(my_node)} = #{is_leader}
+        Todos los nodos: #{inspect(sorted_children)}
+        ¿Soy líder?: #{is_leader}
+        Estado anterior is_leader: #{state.is_leader}
+        """)
+
+        # Detectar si hubo cambio de liderazgo
+        leadership_changed = is_leader != state.is_leader
+
+        if leadership_changed do
           Logger.info("""
           [ZK Leader] Cambio de liderazgo detectado
           Servicio: #{state.service_name}
@@ -159,11 +175,12 @@ defmodule Libremarket.ZookeeperLeader do
           Es líder: #{is_leader}
           Nodos participantes: #{inspect(sorted_children)}
           """)
+        end
 
-          # Notificar cambio de liderazgo
-          if state.on_leader_change do
-            spawn(fn -> state.on_leader_change.(is_leader) end)
-          end
+        # CRÍTICO: Notificar SIEMPRE el estado de liderazgo
+        # Esto asegura que el consumer se inicie incluso si es la primera verificación
+        if state.on_leader_change do
+          spawn(fn -> state.on_leader_change.(is_leader) end)
         end
 
         {:noreply, %{state | is_leader: is_leader}}
@@ -186,12 +203,12 @@ defmodule Libremarket.ZookeeperLeader do
   def handle_info({:disconnected, _pid}, state) do
     Logger.warning("[ZK Leader] Desconectado de Zookeeper")
     new_state = %{state | connected: false, is_leader: false}
-    
+
     # Notificar pérdida de liderazgo
     if state.is_leader && state.on_leader_change do
       spawn(fn -> state.on_leader_change.(false) end)
     end
-    
+
     {:noreply, new_state}
   end
 
@@ -224,15 +241,15 @@ defmodule Libremarket.ZookeeperLeader do
 
   defp ensure_path_exists(pid, path) do
     parts = String.split(path, "/", trim: true)
-    
+
     Enum.reduce(parts, "", fn part, acc ->
       current_path = "#{acc}/#{part}"
-      
-      case :erlzk.create(pid, current_path, "", [:persistent]) do
-        {:ok, _} -> 
+
+      case :erlzk.create(pid, current_path, "", :persistent) do
+        {:ok, _} ->
           Logger.debug("[ZK Leader] Path creado: #{current_path}")
           current_path
-        {:error, :node_exists} -> 
+        {:error, :node_exists} ->
           current_path
         {:error, reason} ->
           Logger.error("[ZK Leader] Error creando path #{current_path}: #{inspect(reason)}")

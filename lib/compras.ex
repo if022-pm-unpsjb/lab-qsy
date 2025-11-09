@@ -6,7 +6,7 @@ defmodule Libremarket.Compras.Server do
   require Logger
   alias Libremarket.AMQP.Publisher
 
-  @global_name {:global, __MODULE__}
+  # Usar nombre local para evitar conflictos entre nodos
   @service_name "compras"
   @replication_interval 2_000
 
@@ -17,19 +17,19 @@ defmodule Libremarket.Compras.Server do
 end
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   def is_leader?() do
     Libremarket.ZookeeperLeader.is_leader?(@service_name)
   end
 
-  def comprar(pid \\ @global_name, producto_id, medio_pago, forma_entrega) do
-    GenServer.call(pid, {:comprar, producto_id, medio_pago, forma_entrega}, 15000)
+  def comprar(producto_id, medio_pago, forma_entrega) do
+    GenServer.call(__MODULE__, {:comprar, producto_id, medio_pago, forma_entrega}, 15000)
   end
 
-  def listar_compras(pid \\ @global_name) do
-    GenServer.call(pid, :listar_compras)
+  def listar_compras() do
+    GenServer.call(__MODULE__, :listar_compras)
   end
 
   @impl true
@@ -366,9 +366,17 @@ end
   end
 
   defp handle_leader_change(is_leader) do
-    case :global.whereis_name(__MODULE__) do
-      :undefined -> :ok
-      pid -> send(pid, {:leader_change, is_leader})
+    pid = Process.whereis(__MODULE__)
+
+    Logger.debug("[Compras] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
+
+    case pid do
+      nil ->
+        Logger.warning("[Compras] No se encontró el proceso local")
+        :ok
+      pid when is_pid(pid) ->
+        Logger.debug("[Compras] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
+        send(pid, {:leader_change, is_leader})
     end
   end
 
@@ -380,7 +388,7 @@ end
         spawn(fn ->
           try do
             :rpc.call(node, GenServer, :cast, [
-              {:global, __MODULE__},
+              Libremarket.Compras.Server,
               {:replicate_state, compras_en_proceso, compras_realizadas, Node.self()}
             ], 3_000)
           catch
@@ -426,21 +434,21 @@ defmodule Libremarket.Compras.Consumer do
   @impl true
   def handle_info(:check_leadership, state) do
     is_leader = Libremarket.Compras.Server.is_leader?()
-    
-    new_state = 
+
+    new_state =
       cond do
         is_leader and not state.is_consuming ->
           Logger.info("[Consumer Compras] Este nodo es LÍDER, iniciando consumo de mensajes")
           start_consuming(state)
-        
+
         not is_leader and state.is_consuming ->
           Logger.info("[Consumer Compras] Este nodo ya NO es líder, deteniendo consumo de mensajes")
           stop_consuming(state)
-        
+
         true ->
           state
       end
-    
+
     Process.send_after(self(), :check_leadership, @check_leader_interval)
     {:noreply, new_state}
   end
@@ -497,33 +505,33 @@ defmodule Libremarket.Compras.Consumer do
 
   # Respuestas de Ventas
   defp process_message(%{"response_type" => "stock_verificado", "compra_id" => compra_id, "producto" => producto}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:stock_verificado, compra_id, producto})
+    GenServer.cast(Libremarket.Compras.Server, {:stock_verificado, compra_id, producto})
   end
 
   defp process_message(%{"response_type" => "venta_confirmada", "compra_id" => compra_id, "producto" => producto}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:venta_confirmada, compra_id, producto})
+    GenServer.cast(Libremarket.Compras.Server, {:venta_confirmada, compra_id, producto})
   end
 
   defp process_message(%{"response_type" => "error_stock", "compra_id" => compra_id, "error" => error}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:error_stock, compra_id, error})
+    GenServer.cast(Libremarket.Compras.Server, {:error_stock, compra_id, error})
   end
 
   # Respuestas de Infracciones
   defp process_message(%{"response_type" => "infraccion_detectada", "compra_id" => compra_id}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:infraccion_detectada, compra_id})
+    GenServer.cast(Libremarket.Compras.Server, {:infraccion_detectada, compra_id})
   end
 
   defp process_message(%{"response_type" => "sin_infraccion", "compra_id" => compra_id}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:sin_infraccion, compra_id})
+    GenServer.cast(Libremarket.Compras.Server, {:sin_infraccion, compra_id})
   end
 
   # Respuestas de Pagos
   defp process_message(%{"response_type" => "pago_procesado", "compra_id" => compra_id, "aprobado" => true}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:pago_aprobado, compra_id})
+    GenServer.cast(Libremarket.Compras.Server, {:pago_aprobado, compra_id})
   end
 
   defp process_message(%{"response_type" => "pago_rechazado", "compra_id" => compra_id}) do
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:pago_rechazado, compra_id})
+    GenServer.cast(Libremarket.Compras.Server, {:pago_rechazado, compra_id})
   end
 
   # Respuestas de Envíos
@@ -533,7 +541,7 @@ defmodule Libremarket.Compras.Consumer do
       forma: String.to_atom(envio["forma"]),
       costo: envio["costo"]
     }
-    GenServer.cast({:global, Libremarket.Compras.Server}, {:envio_procesado, compra_id, envio_atom})
+    GenServer.cast(Libremarket.Compras.Server, {:envio_procesado, compra_id, envio_atom})
   end
 
   defp process_message(message) do
