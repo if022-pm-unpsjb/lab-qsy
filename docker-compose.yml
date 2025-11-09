@@ -49,6 +49,24 @@ services:
       - zookeeper
     mem_limit: 512m
     memswap_limit: 512m
+  
+  ventas3:
+    image: elixir:1.15.7-alpine
+    container_name: ventas3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
+    command: elixir --sname ventas3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
 
   compras1:
     image: elixir:1.15.7-alpine
@@ -152,6 +170,24 @@ services:
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
     command: elixir --sname envios2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+    depends_on:
+      - zookeeper
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  envios3:
+    image: elixir:1.15.7-alpine
+    container_name: envios3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
+    command: elixir --sname envios3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
     depends_on:
       - zookeeper
