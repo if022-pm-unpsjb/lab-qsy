@@ -6,30 +6,44 @@ defmodule Libremarket.Compras.Server do
   require Logger
   alias Libremarket.AMQP.Publisher
 
-  # Usar nombre local para evitar conflictos entre nodos
+  @global_name {:global, __MODULE__}
   @service_name "compras"
   @replication_interval 2_000
 
   defp atomizar_keys(map) when is_map(map) do
-  Map.new(map, fn {k, v} ->
-    {String.to_atom(k), v}
-  end)
-end
+    Map.new(map, fn {k, v} ->
+      {String.to_atom(k), v}
+    end)
+  end
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
   def is_leader?() do
-    Libremarket.ZookeeperLeader.is_leader?(@service_name)
+    # Obtener el PID del proceso global
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
+        false
+
+      pid when is_pid(pid) ->
+        # Consultar al ZookeeperLeader en el nodo donde está el servidor
+        target_node = node(pid)
+
+        try do
+          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
+        catch
+          _, _ -> false
+        end
+    end
   end
 
   def comprar(producto_id, medio_pago, forma_entrega) do
-    GenServer.call(__MODULE__, {:comprar, producto_id, medio_pago, forma_entrega}, 15000)
+    GenServer.call(@global_name, {:comprar, producto_id, medio_pago, forma_entrega}, 15000)
   end
 
   def listar_compras() do
-    GenServer.call(__MODULE__, :listar_compras)
+    GenServer.call(@global_name, :listar_compras)
   end
 
   @impl true
@@ -37,10 +51,11 @@ end
     Logger.info("Servidor de Compras iniciado")
     Logger.info("Esperando elección de líder mediante Zookeeper...")
 
-    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
-      service_name: @service_name,
-      on_leader_change: &handle_leader_change/1
-    )
+    {:ok, _pid} =
+      Libremarket.ZookeeperLeader.start_link(
+        service_name: @service_name,
+        on_leader_change: &handle_leader_change/1
+      )
 
     Process.send_after(self(), :replicate_state, @replication_interval)
 
@@ -49,7 +64,7 @@ end
 
   @impl true
   def handle_call({:comprar, producto_id, medio_pago, forma_entrega}, from, state) do
-    compra_id = "compra_#{:rand.uniform(100000)}"
+    compra_id = "compra_#{:rand.uniform(100_000)}"
 
     Logger.info("Iniciando compra #{compra_id} para producto #{producto_id}")
 
@@ -95,7 +110,13 @@ end
 
         # 2. Solicitar confirmación de venta (reservar stock)
         nuevo_state = put_in(state, [:compras_en_proceso, compra_id, :estado], :confirmando_venta)
-        nuevo_state = put_in(nuevo_state, [:compras_en_proceso, compra_id, :producto], atomizar_keys(producto))
+
+        nuevo_state =
+          put_in(
+            nuevo_state,
+            [:compras_en_proceso, compra_id, :producto],
+            atomizar_keys(producto)
+          )
 
         Publisher.publish("ventas.requests", %{
           "request_type" => "confirmar_venta",
@@ -118,8 +139,15 @@ end
         Logger.info("Venta confirmada para compra #{compra_id}, detectando infracciones...")
 
         # 3. Solicitar detección de infracciones
-        nuevo_state = put_in(state, [:compras_en_proceso, compra_id, :estado], :detectando_infracciones)
-        nuevo_state = put_in(nuevo_state, [:compras_en_proceso, compra_id, :producto], atomizar_keys(producto))
+        nuevo_state =
+          put_in(state, [:compras_en_proceso, compra_id, :estado], :detectando_infracciones)
+
+        nuevo_state =
+          put_in(
+            nuevo_state,
+            [:compras_en_proceso, compra_id, :producto],
+            atomizar_keys(producto)
+          )
 
         Publisher.publish("infracciones.requests", %{
           "request_type" => "detectar_infracciones",
@@ -330,10 +358,13 @@ end
   def handle_cast({:replicate_state, compras_en_proceso, compras_realizadas, from_node}, state) do
     if not state.is_leader do
       Logger.info("Replicando estado desde líder #{from_node}")
-      new_state = %{state |
-        compras_en_proceso: compras_en_proceso,
-        compras_realizadas: compras_realizadas
+
+      new_state = %{
+        state
+        | compras_en_proceso: compras_en_proceso,
+          compras_realizadas: compras_realizadas
       }
+
       {:noreply, new_state}
     else
       {:noreply, state}
@@ -347,6 +378,7 @@ end
     Nodo: #{Node.self()}
     Es líder: #{is_leader}
     """)
+
     {:noreply, %{state | is_leader: is_leader}}
   end
 
@@ -366,16 +398,23 @@ end
   end
 
   defp handle_leader_change(is_leader) do
-    pid = Process.whereis(__MODULE__)
+    # Usar registro global en vez de local
+    pid = :global.whereis_name(__MODULE__)
 
-    Logger.debug("[Compras] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
+    Logger.debug(
+      "[Compras] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}"
+    )
 
     case pid do
-      nil ->
-        Logger.warning("[Compras] No se encontró el proceso local")
+      :undefined ->
+        Logger.warning("[Compras] No se encontró el proceso registrado globalmente")
         :ok
+
       pid when is_pid(pid) ->
-        Logger.debug("[Compras] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
+        Logger.debug(
+          "[Compras] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}"
+        )
+
         send(pid, {:leader_change, is_leader})
     end
   end
@@ -387,10 +426,16 @@ end
       Enum.each(follower_nodes, fn node ->
         spawn(fn ->
           try do
-            :rpc.call(node, GenServer, :cast, [
-              Libremarket.Compras.Server,
-              {:replicate_state, compras_en_proceso, compras_realizadas, Node.self()}
-            ], 3_000)
+            :rpc.call(
+              node,
+              GenServer,
+              :cast,
+              [
+                Libremarket.Compras.Server,
+                {:replicate_state, compras_en_proceso, compras_realizadas, Node.self()}
+              ],
+              3_000
+            )
           catch
             kind, error ->
               Logger.error("Error replicando a #{node}: #{kind} - #{inspect(error)}")
@@ -402,6 +447,7 @@ end
 
   defp get_follower_nodes() do
     all_nodes = Node.list()
+
     Enum.filter(all_nodes, fn node ->
       String.contains?(Atom.to_string(node), "compras")
     end)
@@ -442,7 +488,10 @@ defmodule Libremarket.Compras.Consumer do
           start_consuming(state)
 
         not is_leader and state.is_consuming ->
-          Logger.info("[Consumer Compras] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          Logger.info(
+            "[Consumer Compras] Este nodo ya NO es líder, deteniendo consumo de mensajes"
+          )
+
           stop_consuming(state)
 
         true ->
@@ -485,7 +534,8 @@ defmodule Libremarket.Compras.Consumer do
     with :ok <- AMQP.Exchange.declare(channel, @exchange, :topic, durable: true),
          {:ok, _info} <- AMQP.Queue.declare(channel, @queue, durable: true),
          :ok <- AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "ventas.responses"),
-         :ok <- AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "infracciones.responses"),
+         :ok <-
+           AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "infracciones.responses"),
          :ok <- AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "pagos.responses"),
          :ok <- AMQP.Queue.bind(channel, @queue, @exchange, routing_key: "envios.responses") do
       :ok
@@ -497,6 +547,7 @@ defmodule Libremarket.Compras.Consumer do
       {:ok, message} ->
         process_message(message)
         ack_message(meta)
+
       {:error, reason} ->
         Logger.error("Error decodificando mensaje: #{inspect(reason)}")
         nack_message(meta)
@@ -504,15 +555,27 @@ defmodule Libremarket.Compras.Consumer do
   end
 
   # Respuestas de Ventas
-  defp process_message(%{"response_type" => "stock_verificado", "compra_id" => compra_id, "producto" => producto}) do
+  defp process_message(%{
+         "response_type" => "stock_verificado",
+         "compra_id" => compra_id,
+         "producto" => producto
+       }) do
     GenServer.cast(Libremarket.Compras.Server, {:stock_verificado, compra_id, producto})
   end
 
-  defp process_message(%{"response_type" => "venta_confirmada", "compra_id" => compra_id, "producto" => producto}) do
+  defp process_message(%{
+         "response_type" => "venta_confirmada",
+         "compra_id" => compra_id,
+         "producto" => producto
+       }) do
     GenServer.cast(Libremarket.Compras.Server, {:venta_confirmada, compra_id, producto})
   end
 
-  defp process_message(%{"response_type" => "error_stock", "compra_id" => compra_id, "error" => error}) do
+  defp process_message(%{
+         "response_type" => "error_stock",
+         "compra_id" => compra_id,
+         "error" => error
+       }) do
     GenServer.cast(Libremarket.Compras.Server, {:error_stock, compra_id, error})
   end
 
@@ -526,7 +589,11 @@ defmodule Libremarket.Compras.Consumer do
   end
 
   # Respuestas de Pagos
-  defp process_message(%{"response_type" => "pago_procesado", "compra_id" => compra_id, "aprobado" => true}) do
+  defp process_message(%{
+         "response_type" => "pago_procesado",
+         "compra_id" => compra_id,
+         "aprobado" => true
+       }) do
     GenServer.cast(Libremarket.Compras.Server, {:pago_aprobado, compra_id})
   end
 
@@ -535,12 +602,17 @@ defmodule Libremarket.Compras.Consumer do
   end
 
   # Respuestas de Envíos
-  defp process_message(%{"response_type" => "envio_procesado", "compra_id" => compra_id, "envio" => envio}) do
+  defp process_message(%{
+         "response_type" => "envio_procesado",
+         "compra_id" => compra_id,
+         "envio" => envio
+       }) do
     envio_atom = %{
       id_compra: envio["id_compra"],
       forma: String.to_atom(envio["forma"]),
       costo: envio["costo"]
     }
+
     GenServer.cast(Libremarket.Compras.Server, {:envio_procesado, compra_id, envio_atom})
   end
 
@@ -574,6 +646,7 @@ defmodule Libremarket.Compras.Consumer do
         _, _ -> :ok
       end
     end
+
     %{state | is_consuming: false, consumer_tag: nil}
   end
 end

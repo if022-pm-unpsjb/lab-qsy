@@ -26,44 +26,59 @@ defmodule Libremarket.Infracciones.Server do
   use GenServer
   require Logger
 
+  @global_name {:global, __MODULE__}
   @replication_interval 2_000
   @service_name "infracciones"
 
   # Client API
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: @global_name)
   end
 
   def detectar_infracciones(id_compra) do
-    case Process.whereis(__MODULE__) do
-      nil ->
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
         {:error, :server_not_running}
       _pid ->
-        GenServer.call(__MODULE__, {:detectar_infracciones, id_compra})
+        GenServer.call(@global_name, {:detectar_infracciones, id_compra})
     end
   end
 
   def listar_infracciones() do
-    case Process.whereis(__MODULE__) do
-      nil ->
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
         []
       _pid ->
-        GenServer.call(__MODULE__, :listar_infracciones)
+        GenServer.call(@global_name, :listar_infracciones)
     end
   end
 
   def get_replication_info() do
-    case Process.whereis(__MODULE__) do
-      nil ->
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
         {:error, :server_not_running}
       _pid ->
-        GenServer.call(__MODULE__, :get_replication_info)
+        GenServer.call(@global_name, :get_replication_info)
     end
   end
 
   def is_leader?() do
-    Libremarket.ZookeeperLeader.is_leader?(@service_name)
+    # Obtener el PID del proceso global
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
+        false
+
+      pid when is_pid(pid) ->
+        # Consultar al ZookeeperLeader en el nodo donde está el servidor
+        target_node = node(pid)
+
+        try do
+          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
+        catch
+          _, _ -> false
+        end
+    end
   end
 
   # Server Callbacks
@@ -192,9 +207,17 @@ defmodule Libremarket.Infracciones.Server do
   # Private Functions
 
   defp handle_leader_change(is_leader) do
-    case Process.whereis(__MODULE__) do
-      nil -> :ok
-      pid -> send(pid, {:leader_change, is_leader})
+    pid = :global.whereis_name(__MODULE__)
+
+    Logger.debug("[Infracciones] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
+
+    case pid do
+      :undefined ->
+        Logger.warning("[Infracciones] No se encontró el proceso registrado globalmente")
+        :ok
+      pid when is_pid(pid) ->
+        Logger.debug("[Infracciones] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
+        send(pid, {:leader_change, is_leader})
     end
   end
 
@@ -271,24 +294,24 @@ defmodule Libremarket.Infracciones.Consumer do
   @impl true
   def handle_info(:check_leadership, state) do
     is_leader = Libremarket.Infracciones.Server.is_leader?()
-    
-    new_state = 
+
+    new_state =
       cond do
         is_leader and not state.is_consuming ->
           # Somos líder y no estamos consumiendo, iniciar consumer
           Logger.info("[Consumer Infracciones] Este nodo es LÍDER, iniciando consumo de mensajes")
           start_consuming(state)
-        
+
         not is_leader and state.is_consuming ->
           # Ya no somos líder pero estamos consumiendo, detener consumer
           Logger.info("[Consumer Infracciones] Este nodo ya NO es líder, deteniendo consumo de mensajes")
           stop_consuming(state)
-        
+
         true ->
           # Sin cambios
           state
       end
-    
+
     # Verificar liderazgo periódicamente
     Process.send_after(self(), :check_leadership, @check_leader_interval)
     {:noreply, new_state}

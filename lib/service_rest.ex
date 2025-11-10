@@ -29,28 +29,15 @@ defmodule Libremarket.ServiceRest do
   # Listar infracciones detectadas
   get "/infracciones" do
     try do
-      # Buscar nodo de infracciones en el cluster
-      infracciones_nodes = Node.list()
-        |> Enum.filter(&String.contains?(to_string(&1), "infracciones"))
+      # Usar registro global para encontrar el servidor de infracciones
+      infracciones = case :global.whereis_name(Libremarket.Infracciones.Server) do
+        :undefined ->
+          # Si no hay servidor global, devolver lista vacía
+          []
 
-      infracciones = case infracciones_nodes do
-        [node | _] ->
-          # Llamar al primer nodo de infracciones encontrado
-          case :rpc.call(node, Libremarket.Infracciones.Server, :listar_infracciones, [], 5000) do
-            {:badrpc, reason} ->
-              IO.puts("Error RPC: #{inspect(reason)}")
-              []
-            result when is_list(result) ->
-              result
-            _ ->
-              []
-          end
-        [] ->
-          # Si no hay nodos remotos, intentar local
-          case Process.whereis(Libremarket.Infracciones.Server) do
-            nil -> []
-            _pid -> Libremarket.Infracciones.Server.listar_infracciones()
-          end
+        _pid ->
+          # Llamar al servidor usando su función pública
+          Libremarket.Infracciones.Server.listar_infracciones()
       end
 
       send_resp(conn, 200, Jason.encode!(infracciones))

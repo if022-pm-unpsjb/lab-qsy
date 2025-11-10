@@ -19,7 +19,21 @@ defmodule Libremarket.Envios.Server do
   end
 
   def is_leader?() do
-    Libremarket.ZookeeperLeader.is_leader?(@service_name)
+    # Obtener el PID del proceso global
+    case :global.whereis_name(__MODULE__) do
+      :undefined ->
+        false
+
+      pid when is_pid(pid) ->
+        # Consultar al ZookeeperLeader en el nodo donde está el servidor
+        target_node = node(pid)
+
+        try do
+          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
+        catch
+          _, _ -> false
+        end
+    end
   end
 
   def procesarEnvio(pid \\ @global_name, idCompra, forma_entrega) do
