@@ -11,45 +11,40 @@ defmodule Libremarket.Envios.Server do
   use GenServer
   require Logger
 
-  @global_name {:global, __MODULE__}
   @service_name "envios"
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   def is_leader?() do
-    # Obtener el PID del proceso global
-    case :global.whereis_name(__MODULE__) do
-      :undefined ->
-        false
-
-      pid when is_pid(pid) ->
-        # Consultar al ZookeeperLeader en el nodo donde está el servidor
-        target_node = node(pid)
-
-        try do
-          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
-        catch
-          _, _ -> false
-        end
+    try do
+      Libremarket.LeaderElection.is_leader?(@service_name)
+    catch
+      _, _ -> false
     end
   end
 
-  def procesarEnvio(pid \\ @global_name, idCompra, forma_entrega) do
-    GenServer.call(pid, {:procesarEnvio, idCompra, forma_entrega})
+  def procesarEnvio(idCompra, forma_entrega) do
+    case find_leader_node() do
+      nil -> {:error, :no_leader}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, {:procesarEnvio, idCompra, forma_entrega}])
+    end
   end
 
-  def listarEnvios(pid \\ @global_name) do
-    GenServer.call(pid, :listarEnvios)
+  def listarEnvios() do
+    case find_any_node() do
+      nil -> %{}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, :listarEnvios])
+    end
   end
 
   @impl true
   def init(_opts) do
     Logger.info("Servidor de Envíos iniciado")
-    Logger.info("Esperando elección de líder mediante Zookeeper...")
+    Logger.info("Esperando elección de líder...")
 
-    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+    {:ok, _pid} = Libremarket.LeaderElection.start_link(
       service_name: @service_name,
       on_leader_change: &handle_leader_change/1
     )
@@ -90,18 +85,38 @@ defmodule Libremarket.Envios.Server do
   end
 
   defp handle_leader_change(is_leader) do
-    pid = :global.whereis_name(__MODULE__)
-
-    Logger.debug("[Envios] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
-
-    case pid do
-      :undefined ->
-        Logger.warning("[Envios] No se encontró el proceso registrado globalmente")
+    case Process.whereis(__MODULE__) do
+      nil ->
+        Logger.warning("[Envios] No se encontró el proceso local")
         :ok
       pid when is_pid(pid) ->
-        Logger.debug("[Envios] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
         send(pid, {:leader_change, is_leader})
     end
+  end
+
+  defp find_leader_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      node_str = Atom.to_string(node)
+      if String.contains?(node_str, "envios") do
+        try do
+          :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [@service_name], 2000) == true
+        catch
+          _, _ -> false
+        end
+      else
+        false
+      end
+    end)
+  end
+
+  defp find_any_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      String.contains?(Atom.to_string(node), "envios")
+    end)
   end
 end
 
@@ -202,7 +217,6 @@ defmodule Libremarket.Envios.Consumer do
     forma_atom = String.to_atom(forma_entrega)
     envio = Libremarket.Envios.Server.procesarEnvio(producto_id, forma_atom)
 
-    # Publicar evento de envío creado
     Publisher.publish("envios.events", %{
       "event_type" => "envio_creado",
       "envio" => %{
@@ -213,7 +227,6 @@ defmodule Libremarket.Envios.Consumer do
       "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
     })
 
-    # Responder a compras
     Publisher.publish("envios.responses", %{
       "response_type" => "envio_procesado",
       "compra_id" => compra_id,

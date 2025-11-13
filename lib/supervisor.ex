@@ -24,7 +24,6 @@ defmodule Libremarket.Supervisor do
       ]
     ]
 
-    # Servicios base (siempre activos)
     base_services = [
       {Registry, keys: :unique, name: Libremarket.Registry},
       {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
@@ -37,35 +36,35 @@ defmodule Libremarket.Supervisor do
         []
 
       "Elixir.Libremarket.Ventas.Server" ->
-        Logger.info("✓ Iniciando nodo de Ventas con elección de líder (Zookeeper)")
+        Logger.info("✓ Iniciando nodo de Ventas con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Ventas.Server, %{}},
           Libremarket.Ventas.Consumer
         ]
 
       "Elixir.Libremarket.Compras.Server" ->
-        Logger.info("✓ Iniciando nodo de Compras con elección de líder (Zookeeper)")
+        Logger.info("✓ Iniciando nodo de Compras con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Compras.Server, %{}},
           Libremarket.Compras.Consumer
         ]
 
       "Elixir.Libremarket.Pagos.Server" ->
-        Logger.info("✓ Iniciando nodo de Pagos con elección de líder (Zookeeper)")
+        Logger.info("✓ Iniciando nodo de Pagos con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Pagos.Server, %{}},
           Libremarket.Pagos.Consumer
         ]
 
       "Elixir.Libremarket.Envios.Server" ->
-        Logger.info("✓ Iniciando nodo de Envíos con elección de líder (Zookeeper)")
+        Logger.info("✓ Iniciando nodo de Envíos con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Envios.Server, %{}},
           Libremarket.Envios.Consumer
         ]
 
       "Elixir.Libremarket.Infracciones.Server" ->
-        Logger.info("Iniciando nodo de Infracciones con elección de líder (Zookeeper)")
+        Logger.info("Iniciando nodo de Infracciones con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Infracciones.Server, %{}},
           Libremarket.Infracciones.Consumer

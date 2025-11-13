@@ -28,7 +28,6 @@ defmodule Libremarket.MixProject do
       {:jason, "~> 1.4"},
       {:amqp, "~> 3.3"},
       {:castore, "~> 1.0"},
-      {:erlzk, "~> 0.6.4"}
     ]
   end
 end

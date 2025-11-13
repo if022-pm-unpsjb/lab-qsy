@@ -3,6 +3,7 @@ defmodule Libremarket.ServiceRest do
   Servicio REST para exponer los recursos de Libremarket.
   Permite listar productos, realizar compras y consultar compras.
   """
+
   use Plug.Router
   use Plug.ErrorHandler
 
@@ -12,7 +13,18 @@ defmodule Libremarket.ServiceRest do
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: Jason
+
   plug :dispatch
+
+  # Funciones auxiliares para encontrar nodos
+  defp find_compras_node() do
+    nodes = [Node.self() | Node.list()]
+
+    Enum.find(nodes, fn node ->
+      node_str = Atom.to_string(node)
+      String.contains?(node_str, "compras")
+    end)
+  end
 
   # Listar productos disponibles
   get "/productos" do
@@ -22,29 +34,39 @@ defmodule Libremarket.ServiceRest do
 
   # Listar compras realizadas
   get "/compras" do
-    compras = Libremarket.Compras.Server.listar_compras()
-    send_resp(conn, 200, Jason.encode!(compras))
+    case find_compras_node() do
+      nil ->
+        send_resp(conn, 503, Jason.encode!(%{
+          error: "Servicio de compras no disponible"
+        }))
+
+      node ->
+        try do
+          compras = :rpc.call(node, Libremarket.Compras.Server, :listar_compras, [])
+          send_resp(conn, 200, Jason.encode!(compras))
+        rescue
+          error ->
+            IO.puts("Error obteniendo compras: #{inspect(error)}")
+            send_resp(conn, 500, Jason.encode!(%{
+              error: "Error interno",
+              details: inspect(error)
+            }))
+        end
+    end
   end
 
   # Listar infracciones detectadas
   get "/infracciones" do
     try do
-      # Usar registro global para encontrar el servidor de infracciones
-      infracciones = case :global.whereis_name(Libremarket.Infracciones.Server) do
-        :undefined ->
-          # Si no hay servidor global, devolver lista vacía
-          []
-
-        _pid ->
-          # Llamar al servidor usando su función pública
-          Libremarket.Infracciones.Server.listar_infracciones()
-      end
-
+      infracciones = Libremarket.Ui.listar_infracciones()
       send_resp(conn, 200, Jason.encode!(infracciones))
     rescue
       error ->
         IO.puts("Error obteniendo infracciones: #{inspect(error)}")
-        send_resp(conn, 500, Jason.encode!(%{error: "Error interno", details: inspect(error)}))
+        send_resp(conn, 500, Jason.encode!(%{
+          error: "Error interno",
+          details: inspect(error)
+        }))
     end
   end
 
@@ -62,12 +84,14 @@ defmodule Libremarket.ServiceRest do
               status: "ok",
               compra: compra
             }))
+
           {:error, reason} ->
             send_resp(conn, 400, Jason.encode!(%{
               status: "error",
               reason: to_string(reason)
             }))
         end
+
       _ ->
         send_resp(conn, 400, Jason.encode!(%{error: "JSON inválido"}))
     end

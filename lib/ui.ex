@@ -4,13 +4,22 @@ defmodule Libremarket.Ui do
   Las compras son asíncronas - devuelven un ID de compra para seguimiento.
   """
 
+  # Función auxiliar para encontrar un nodo de un servicio específico
+  defp find_service_node(service_name) do
+    nodes = [Node.self() | Node.list()]
+
+    Enum.find(nodes, fn node ->
+      node_str = Atom.to_string(node)
+      String.contains?(node_str, service_name)
+    end)
+  end
+
   def comprar_async(producto_id, forma_entrega, medio_pago) do
     try do
-      # Generar ID de compra único
       compra_id = "compra_#{:rand.uniform(100_000)}"
 
       Task.start(fn ->
-        call_compras_server(:comprar, [producto_id, medio_pago, forma_entrega])
+        comprar(producto_id, forma_entrega, medio_pago)
       end)
 
       {:ok,
@@ -28,8 +37,13 @@ defmodule Libremarket.Ui do
 
   def comprar(producto_id, forma_entrega, medio_pago) do
     try do
-      # Compra síncrona con timeout mayor
-      call_compras_server(:comprar, [producto_id, medio_pago, forma_entrega])
+      case find_service_node("compras") do
+        nil ->
+          {:error, :servicio_no_disponible}
+
+        node ->
+          :rpc.call(node, Libremarket.Compras.Server, :comprar, [producto_id, medio_pago, forma_entrega])
+      end
     rescue
       error ->
         IO.puts("Error comunicándose con servicio de compras: #{inspect(error)}")
@@ -44,7 +58,14 @@ defmodule Libremarket.Ui do
 
   def listar_productos() do
     try do
-      call_ventas_server(:listar_productos, [])
+      case find_service_node("ventas") do
+        nil ->
+          IO.puts("No se encontró ningún nodo de ventas disponible")
+          %{}
+
+        node ->
+          :rpc.call(node, Libremarket.Ventas.Server, :listar_productos, [])
+      end
     rescue
       error ->
         IO.puts("Error obteniendo productos: #{inspect(error)}")
@@ -67,80 +88,70 @@ defmodule Libremarket.Ui do
     IO.puts("\n=== VERIFICACIÓN DE SERVICIOS ===")
 
     servicios = [
-      {"Ventas Server", Libremarket.Ventas.Server},
-      {"Ventas Consumer", Libremarket.Ventas.Consumer},
-      {"Compras Server", Libremarket.Compras.Server},
-      {"Compras Consumer", Libremarket.Compras.Consumer},
-      {"Pagos Server", Libremarket.Pagos.Server},
-      {"Pagos Consumer", Libremarket.Pagos.Consumer},
-      {"Envíos Server", Libremarket.Envios.Server},
-      {"Envíos Consumer", Libremarket.Envios.Consumer},
-      {"Infracciones Server", Libremarket.Infracciones.Server},
-      {"Infracciones Consumer", Libremarket.Infracciones.Consumer},
-      {"AMQP Connection", Libremarket.AMQP.Connection}
-    ]
-
-    # Servidores que usan registro global
-    global_servers = [
-      Libremarket.Ventas.Server,
-      Libremarket.Compras.Server,
-      Libremarket.Pagos.Server,
-      Libremarket.Envios.Server,
-      Libremarket.Infracciones.Server
-    ]
-
-    # Consumers y AMQP Connection usan registro local
-    local_servers = [
-      Libremarket.Ventas.Consumer,
-      Libremarket.Compras.Consumer,
-      Libremarket.Pagos.Consumer,
-      Libremarket.Envios.Consumer,
-      Libremarket.Infracciones.Consumer,
-      Libremarket.AMQP.Connection
+      {"Ventas Server", "ventas"},
+      {"Compras Server", "compras"},
+      {"Pagos Server", "pagos"},
+      {"Envíos Server", "envios"},
+      {"Infracciones Server", "infracciones"},
+      {"AMQP Connection", nil}
     ]
 
     total = length(servicios)
 
     activos =
-      Enum.count(servicios, fn {_nombre, modulo} ->
-        cond do
-          modulo in global_servers ->
-            case :global.whereis_name(modulo) do
-              :undefined -> false
-              _pid -> true
-            end
+      Enum.count(servicios, fn {_nombre, servicio} ->
+        case servicio do
+          nil ->
+            # AMQP Connection usa registro local
+            Process.whereis(Libremarket.AMQP.Connection) != nil
 
-          modulo in local_servers ->
-            case Process.whereis(modulo) do
-              nil -> false
-              _pid -> true
-            end
+          service_name ->
+            # Buscar nodos del servicio
+            all_nodes = [Node.self() | Node.list()]
 
-          true ->
-            false
+            Enum.any?(all_nodes, fn node ->
+              node_str = Atom.to_string(node)
+              String.contains?(node_str, service_name)
+            end)
         end
       end)
 
-    Enum.each(servicios, fn {nombre, modulo} ->
-      pid =
-        cond do
-          modulo in global_servers ->
-            case :global.whereis_name(modulo) do
-              :undefined -> nil
-              pid -> pid
+    Enum.each(servicios, fn {nombre, servicio} ->
+      status = case servicio do
+        nil ->
+          case Process.whereis(Libremarket.AMQP.Connection) do
+            nil -> "✗ NO ACTIVO"
+            pid -> "✓ #{inspect(pid)}"
+          end
+
+        service_name ->
+          all_nodes = [Node.self() | Node.list()]
+
+          nodes = Enum.filter(all_nodes, fn node ->
+            node_str = Atom.to_string(node)
+            String.contains?(node_str, service_name)
+          end)
+
+          if Enum.empty?(nodes) do
+            "✗ NO ACTIVO"
+          else
+            leader = Enum.find(nodes, fn node ->
+              try do
+                :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [service_name], 2000) == true
+              catch
+                _, _ -> false
+              end
+            end)
+
+            if leader do
+              "✓ Líder: #{leader} | Nodos: #{length(nodes)}"
+            else
+              "⚠ #{length(nodes)} nodos, sin líder"
             end
-
-          modulo in local_servers ->
-            Process.whereis(modulo)
-
-          true ->
-            nil
-        end
-
-      case pid do
-        nil -> IO.puts("#{nombre}: ✗ NO ACTIVO")
-        pid -> IO.puts("#{nombre}: ✓ #{inspect(pid)}")
+          end
       end
+
+      IO.puts("#{nombre}: #{status}")
     end)
 
     IO.puts("\nResultado: #{activos}/#{total} servicios activos")
@@ -154,7 +165,13 @@ defmodule Libremarket.Ui do
 
   def listar_compras() do
     try do
-      call_compras_server(:listar_compras, [])
+      case find_service_node("compras") do
+        nil ->
+          []
+
+        node ->
+          :rpc.call(node, Libremarket.Compras.Server, :listar_compras, [])
+      end
     rescue
       error ->
         IO.puts("Error obteniendo compras: #{inspect(error)}")
@@ -182,41 +199,38 @@ defmodule Libremarket.Ui do
     end
   end
 
-  # Funciones privadas para llamar a servicios remotos usando registro global
+  def listar_infracciones() do
+    try do
+      # Buscar en todos los nodos donde pueda estar el servicio de infracciones
+      nodes = [Node.self() | Node.list()]
 
-  defp call_compras_server(function, args) do
-    # Buscar el proceso usando registro global
-    case :global.whereis_name(Libremarket.Compras.Server) do
-      :undefined ->
-        {:error, :no_compras_node}
+      # Primero intentar buscar un nodo específico de infracciones
+      infracciones_node = Enum.find(nodes, fn node ->
+        node_str = Atom.to_string(node)
+        String.contains?(node_str, "infracciones")
+      end)
 
-      pid when is_pid(pid) ->
+      # Si no existe nodo específico, buscar en todos los nodos
+      node = infracciones_node || Enum.find(nodes, fn n ->
         try do
-          message = List.to_tuple([function | args])
-          result = GenServer.call(pid, message, 15000)
-          result
+          :rpc.call(n, Process, :whereis, [Libremarket.Infracciones.Server], 2000) != nil
         catch
-          :exit, {:timeout, _} -> {:error, :timeout}
-          :exit, reason -> {:error, reason}
+          _, _ -> false
         end
-    end
-  end
+      end)
 
-  defp call_ventas_server(function, args) do
-    # Buscar el proceso usando registro global
-    case :global.whereis_name(Libremarket.Ventas.Server) do
-      :undefined ->
-        {:error, :no_ventas_node}
+      case node do
+        nil ->
+          IO.puts("No se encontró el servicio de infracciones")
+          []
 
-      pid when is_pid(pid) ->
-        try do
-          message = List.to_tuple([function | args])
-          result = GenServer.call(pid, message, 15000)
-          result
-        catch
-          :exit, {:timeout, _} -> {:error, :timeout}
-          :exit, reason -> {:error, reason}
-        end
+        n ->
+          :rpc.call(n, Libremarket.Infracciones.Server, :listar_infracciones, [])
+      end
+    rescue
+      error ->
+        IO.puts("Error obteniendo infracciones: #{inspect(error)}")
+        []
     end
   end
 end

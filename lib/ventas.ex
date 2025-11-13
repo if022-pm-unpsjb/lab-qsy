@@ -70,54 +70,55 @@ defmodule Libremarket.Ventas.Server do
   use GenServer
   require Logger
 
-  @global_name {:global, __MODULE__}
   @service_name "ventas"
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   def is_leader?() do
-    # Obtener el PID del proceso global
-    case :global.whereis_name(__MODULE__) do
-      :undefined ->
-        false
-
-      pid when is_pid(pid) ->
-        # Consultar al ZookeeperLeader en el nodo donde está el servidor
-        target_node = node(pid)
-
-        try do
-          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
-        catch
-          _, _ -> false
-        end
+    try do
+      Libremarket.LeaderElection.is_leader?(@service_name)
+    catch
+      _, _ -> false
     end
   end
 
-  def verificar_producto(pid \\ @global_name, producto_id) do
-    GenServer.call(pid, {:verificar_producto, producto_id})
+  def verificar_producto(producto_id) do
+    case find_any_node() do
+      nil -> {:error, :no_node}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, {:verificar_producto, producto_id}])
+    end
   end
 
-  def confirmar_venta(pid \\ @global_name, producto_id) do
-    GenServer.call(pid, {:confirmar_venta, producto_id})
+  def confirmar_venta(producto_id) do
+    case find_leader_node() do
+      nil -> {:error, :no_leader}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, {:confirmar_venta, producto_id}])
+    end
   end
 
-  def listar_productos(pid \\ @global_name) do
-    GenServer.call(pid, :listar_productos)
+  def listar_productos() do
+    case find_any_node() do
+      nil -> %{}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, :listar_productos])
+    end
   end
 
-  def reponer_stock(pid \\ @global_name, producto_id) do
-    GenServer.cast(pid, {:reponer_stock, producto_id})
+  def reponer_stock(producto_id) do
+    case find_leader_node() do
+      nil -> :ok
+      node -> :rpc.call(node, GenServer, :cast, [__MODULE__, {:reponer_stock, producto_id}])
+    end
   end
 
   @impl true
   def init(_state) do
     productos = Libremarket.Ventas.generar_productos_iniciales()
     Logger.info("Servidor de Ventas iniciado con #{map_size(productos)} productos")
-    Logger.info("Esperando elección de líder mediante Zookeeper...")
+    Logger.info("Esperando elección de líder...")
 
-    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+    {:ok, _pid} = Libremarket.LeaderElection.start_link(
       service_name: @service_name,
       on_leader_change: &handle_leader_change/1
     )
@@ -178,18 +179,38 @@ defmodule Libremarket.Ventas.Server do
   end
 
   defp handle_leader_change(is_leader) do
-    pid = :global.whereis_name(__MODULE__)
-
-    Logger.debug("[Ventas] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
-
-    case pid do
-      :undefined ->
-        Logger.warning("[Ventas] No se encontró el proceso registrado globalmente")
+    case Process.whereis(__MODULE__) do
+      nil ->
+        Logger.warning("[Ventas] No se encontró el proceso local")
         :ok
       pid when is_pid(pid) ->
-        Logger.debug("[Ventas] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
         send(pid, {:leader_change, is_leader})
     end
+  end
+
+  defp find_leader_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      node_str = Atom.to_string(node)
+      if String.contains?(node_str, "ventas") do
+        try do
+          :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [@service_name], 2000) == true
+        catch
+          _, _ -> false
+        end
+      else
+        false
+      end
+    end)
+  end
+
+  defp find_any_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      String.contains?(Atom.to_string(node), "ventas")
+    end)
   end
 end
 
@@ -290,7 +311,6 @@ defmodule Libremarket.Ventas.Consumer do
 
     case Libremarket.Ventas.Server.verificar_producto(producto_id) do
       {:ok, producto} ->
-        # Responder con stock verificado
         Publisher.publish("ventas.responses", %{
           "response_type" => "stock_verificado",
           "compra_id" => compra_id,
@@ -304,7 +324,6 @@ defmodule Libremarket.Ventas.Consumer do
         })
 
       {:error, reason} ->
-        # Responder con error
         Publisher.publish("ventas.responses", %{
           "response_type" => "error_stock",
           "compra_id" => compra_id,
@@ -319,14 +338,12 @@ defmodule Libremarket.Ventas.Consumer do
 
     case Libremarket.Ventas.Server.confirmar_venta(producto_id) do
       {:ok, producto} ->
-        # Publicar evento de venta confirmada
         Publisher.publish("ventas.events", %{
           "event_type" => "producto_vendido",
           "producto_id" => producto_id,
           "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
         })
 
-        # Publicar evento de stock actualizado
         Publisher.publish("ventas.events", %{
           "event_type" => "stock_actualizado",
           "producto_id" => producto_id,
@@ -334,7 +351,6 @@ defmodule Libremarket.Ventas.Consumer do
           "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
         })
 
-        # Responder a compras
         Publisher.publish("ventas.responses", %{
           "response_type" => "venta_confirmada",
           "compra_id" => compra_id,
@@ -361,7 +377,6 @@ defmodule Libremarket.Ventas.Consumer do
     Logger.info("Reponiendo stock para producto #{producto_id}")
     Libremarket.Ventas.Server.reponer_stock(producto_id)
 
-    # Publicar evento de stock repuesto
     Publisher.publish("ventas.events", %{
       "event_type" => "stock_repuesto",
       "producto_id" => producto_id,

@@ -1,7 +1,6 @@
 defmodule Libremarket.Pagos do
   @moduledoc false
   def procesar() do
-    # 70% true, 30% false
     Enum.random(1..100) <= 70
   end
 end
@@ -13,41 +12,33 @@ defmodule Libremarket.Pagos.Server do
   use GenServer
   require Logger
 
-  @global_name {:global, __MODULE__}
   @service_name "pagos"
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   def is_leader?() do
-    # Obtener el PID del proceso global
-    case :global.whereis_name(__MODULE__) do
-      :undefined ->
-        false
-
-      pid when is_pid(pid) ->
-        # Consultar al ZookeeperLeader en el nodo donde está el servidor
-        target_node = node(pid)
-
-        try do
-          :rpc.call(target_node, Libremarket.ZookeeperLeader, :is_leader?, [@service_name], 5000)
-        catch
-          _, _ -> false
-        end
+    try do
+      Libremarket.LeaderElection.is_leader?(@service_name)
+    catch
+      _, _ -> false
     end
   end
 
-  def procesarPago(pid \\ @global_name, idPago) do
-    GenServer.call(pid, {:procesarPago, idPago})
+  def procesarPago(idPago) do
+    case find_leader_node() do
+      nil -> {:error, :no_leader}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, {:procesarPago, idPago}])
+    end
   end
 
   @impl true
   def init(_opts) do
     Logger.info("Servidor de Pagos iniciado")
-    Logger.info("Esperando elección de líder mediante Zookeeper...")
+    Logger.info("Esperando elección de líder...")
 
-    {:ok, _pid} = Libremarket.ZookeeperLeader.start_link(
+    {:ok, _pid} = Libremarket.LeaderElection.start_link(
       service_name: @service_name,
       on_leader_change: &handle_leader_change/1
     )
@@ -83,18 +74,30 @@ defmodule Libremarket.Pagos.Server do
   end
 
   defp handle_leader_change(is_leader) do
-    pid = :global.whereis_name(__MODULE__)
-
-    Logger.debug("[Pagos] handle_leader_change llamado: is_leader=#{is_leader}, pid=#{inspect(pid)}")
-
-    case pid do
-      :undefined ->
-        Logger.warning("[Pagos] No se encontró el proceso registrado globalmente")
+    case Process.whereis(__MODULE__) do
+      nil ->
+        Logger.warning("[Pagos] No se encontró el proceso local")
         :ok
       pid when is_pid(pid) ->
-        Logger.debug("[Pagos] Enviando mensaje {:leader_change, #{is_leader}} a #{inspect(pid)}")
         send(pid, {:leader_change, is_leader})
     end
+  end
+
+  defp find_leader_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      node_str = Atom.to_string(node)
+      if String.contains?(node_str, "pagos") do
+        try do
+          :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [@service_name], 2000) == true
+        catch
+          _, _ -> false
+        end
+      else
+        false
+      end
+    end)
   end
 end
 
@@ -195,7 +198,6 @@ defmodule Libremarket.Pagos.Consumer do
     resultado = Libremarket.Pagos.Server.procesarPago(pago_id)
 
     if resultado do
-      # Pago aprobado
       Publisher.publish("pagos.events", %{
         "event_type" => "pago_procesado",
         "pago_id" => pago_id,
@@ -211,7 +213,6 @@ defmodule Libremarket.Pagos.Consumer do
         "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
       })
     else
-      # Pago rechazado
       Publisher.publish("pagos.events", %{
         "event_type" => "pago_rechazado",
         "pago_id" => pago_id,

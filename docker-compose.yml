@@ -1,19 +1,6 @@
 version: "3.8"
 
 services:
-  zookeeper:
-    image: zookeeper:3.9
-    container_name: zookeeper
-    network_mode: "host"
-    environment:
-      ZOO_MY_ID: 1
-      ZOO_SERVERS: server.1=0.0.0.0:2888:3888;2181
-      ZOO_TICK_TIME: 2000
-      ZOO_INIT_LIMIT: 10
-      ZOO_SYNC_LIMIT: 5
-    mem_limit: 512m
-    memswap_limit: 512m
-
   ventas1:
     image: elixir:1.15.7-alpine
     container_name: ventas1
@@ -27,10 +14,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
     command: elixir --sname ventas1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   ventas2:
     image: elixir:1.15.7-alpine
@@ -45,10 +28,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
     command: elixir --sname ventas2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
   
   ventas3:
     image: elixir:1.15.7-alpine
@@ -63,10 +42,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
     command: elixir --sname ventas3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   compras1:
     image: elixir:1.15.7-alpine
@@ -81,10 +56,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
     command: elixir --sname compras1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   compras2:
     image: elixir:1.15.7-alpine
@@ -99,10 +70,20 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
     command: elixir --sname compras2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
+
+  compras3:
+    image: elixir:1.15.7-alpine
+    container_name: compras3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
+    command: elixir --sname compras3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
 
   pagos1:
     image: elixir:1.15.7-alpine
@@ -117,10 +98,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
     command: elixir --sname pagos1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   pagos2:
     image: elixir:1.15.7-alpine
@@ -135,10 +112,20 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
     command: elixir --sname pagos2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
+
+  pagos3:
+    image: elixir:1.15.7-alpine
+    container_name: pagos3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
+    command: elixir --sname pagos3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
 
   envios1:
     image: elixir:1.15.7-alpine
@@ -153,10 +140,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
     command: elixir --sname envios1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   envios2:
     image: elixir:1.15.7-alpine
@@ -171,10 +154,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
     command: elixir --sname envios2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   envios3:
     image: elixir:1.15.7-alpine
@@ -189,12 +168,7 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
     command: elixir --sname envios3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
-  # INFRACCIONES - NODO 1 (participa en elección de líder)
   infracciones1:
     image: elixir:1.15.7-alpine
     container_name: infracciones1
@@ -208,12 +182,7 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
     command: elixir --sname infracciones1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
-  # INFRACCIONES - NODO 2 (participa en elección de líder)
   infracciones2:
     image: elixir:1.15.7-alpine
     container_name: infracciones2
@@ -227,12 +196,7 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
     command: elixir --sname infracciones2 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
-  # INFRACCIONES - NODO 3 (participa en elección de líder)
   infracciones3:
     image: elixir:1.15.7-alpine
     container_name: infracciones3
@@ -246,10 +210,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
     command: elixir --sname infracciones3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    depends_on:
-      - zookeeper
-    mem_limit: 512m
-    memswap_limit: 512m
 
   rest:
     image: elixir:1.15.7-alpine
@@ -264,8 +224,6 @@ services:
       SERVER_TO_RUN: Elixir.Libremarket.ServiceRest
     command: elixir --sname rest --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
-    mem_limit: 512m
-    memswap_limit: 512m
 
   simulador:
     image: elixir:1.15.7-alpine
@@ -282,5 +240,3 @@ services:
     user: "${DOCKER_UID}:${DOCKER_GID}"
     profiles:
       - testing
-    mem_limit: 512m
-    memswap_limit: 512m
