@@ -27,7 +27,7 @@ defmodule Libremarket.MixProject do
       {:plug_cowboy, "~> 2.7"},
       {:jason, "~> 1.4"},
       {:amqp, "~> 3.3"},
-      {:castore, "~> 1.0"}
+      {:castore, "~> 1.0"},
     ]
   end
 end

@@ -1,32 +1,49 @@
 defmodule Libremarket.Pagos do
   @moduledoc false
   def procesar() do
-    # 70% true, 30% false
     Enum.random(1..100) <= 70
   end
 end
 
 defmodule Libremarket.Pagos.Server do
   @moduledoc """
-  Servidor de Pagos
+  Servidor de Pagos con elección de líder
   """
   use GenServer
   require Logger
 
-  @global_name {:global, __MODULE__}
+  @service_name "pagos"
 
   def start_link(opts \\ %{}) do
-    GenServer.start_link(__MODULE__, opts, name: @global_name)
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def procesarPago(pid \\ @global_name, idPago) do
-    GenServer.call(pid, {:procesarPago, idPago})
+  def is_leader?() do
+    try do
+      Libremarket.LeaderElection.is_leader?(@service_name)
+    catch
+      _, _ -> false
+    end
+  end
+
+  def procesarPago(idPago) do
+    case find_leader_node() do
+      nil -> {:error, :no_leader}
+      node -> :rpc.call(node, GenServer, :call, [__MODULE__, {:procesarPago, idPago}])
+    end
   end
 
   @impl true
   def init(_opts) do
     Logger.info("Servidor de Pagos iniciado")
-    {:ok, %{}}
+    Logger.info("Esperando elección de líder...")
+
+    {:ok, _pid} = Libremarket.LeaderElection.start_link(
+      service_name: @service_name,
+      on_leader_change: &handle_leader_change/1
+    )
+
+    {:ok, %{is_leader: false}}
   end
 
   @impl true
@@ -40,11 +57,53 @@ defmodule Libremarket.Pagos.Server do
   def handle_call(:listarPagos, _from, state) do
     {:reply, state, state}
   end
+
+  @impl true
+  def handle_info({:leader_change, is_leader}, state) do
+    Logger.info("""
+    [Pagos] Cambio de liderazgo
+    Nodo: #{Node.self()}
+    Es líder: #{is_leader}
+    """)
+    {:noreply, %{state | is_leader: is_leader}}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  defp handle_leader_change(is_leader) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        Logger.warning("[Pagos] No se encontró el proceso local")
+        :ok
+      pid when is_pid(pid) ->
+        send(pid, {:leader_change, is_leader})
+    end
+  end
+
+  defp find_leader_node() do
+    all_nodes = [Node.self() | Node.list()]
+
+    Enum.find(all_nodes, fn node ->
+      node_str = Atom.to_string(node)
+      if String.contains?(node_str, "pagos") do
+        try do
+          :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [@service_name], 2000) == true
+        catch
+          _, _ -> false
+        end
+      else
+        false
+      end
+    end)
+  end
 end
 
 defmodule Libremarket.Pagos.Consumer do
   @moduledoc """
-  Consumer AMQP para el servicio de Pagos
+  Consumer AMQP para el servicio de Pagos con elección de líder
   """
   use GenServer
   require Logger
@@ -52,6 +111,7 @@ defmodule Libremarket.Pagos.Consumer do
 
   @exchange "libremarket_exchange"
   @queue "pagos_queue"
+  @check_leader_interval 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -59,17 +119,39 @@ defmodule Libremarket.Pagos.Consumer do
 
   @impl true
   def init(_opts) do
-    send(self(), :setup)
-    {:ok, %{}}
+    send(self(), :check_leadership)
+    {:ok, %{channel: nil, consumer_tag: nil, is_consuming: false}}
+  end
+
+  @impl true
+  def handle_info(:check_leadership, state) do
+    is_leader = Libremarket.Pagos.Server.is_leader?()
+
+    new_state =
+      cond do
+        is_leader and not state.is_consuming ->
+          Logger.info("[Consumer Pagos] Este nodo es LÍDER, iniciando consumo de mensajes")
+          start_consuming(state)
+
+        not is_leader and state.is_consuming ->
+          Logger.info("[Consumer Pagos] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          stop_consuming(state)
+
+        true ->
+          state
+      end
+
+    Process.send_after(self(), :check_leadership, @check_leader_interval)
+    {:noreply, new_state}
   end
 
   @impl true
   def handle_info(:setup, state) do
     with {:ok, channel} <- Connection.get_channel(),
          :ok <- setup_queue(channel),
-         {:ok, _consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
+         {:ok, consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
       Logger.info("Consumer de Pagos iniciado en cola: #{@queue}")
-      {:noreply, Map.put(state, :channel, channel)}
+      {:noreply, %{state | channel: channel, consumer_tag: consumer_tag, is_consuming: true}}
     else
       error ->
         Logger.error("Error configurando consumer de Pagos: #{inspect(error)}")
@@ -116,7 +198,6 @@ defmodule Libremarket.Pagos.Consumer do
     resultado = Libremarket.Pagos.Server.procesarPago(pago_id)
 
     if resultado do
-      # Pago aprobado
       Publisher.publish("pagos.events", %{
         "event_type" => "pago_procesado",
         "pago_id" => pago_id,
@@ -132,7 +213,6 @@ defmodule Libremarket.Pagos.Consumer do
         "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
       })
     else
-      # Pago rechazado
       Publisher.publish("pagos.events", %{
         "event_type" => "pago_rechazado",
         "pago_id" => pago_id,
@@ -163,5 +243,22 @@ defmodule Libremarket.Pagos.Consumer do
     with {:ok, channel} <- Connection.get_channel() do
       AMQP.Basic.nack(channel, meta.delivery_tag, requeue: false)
     end
+  end
+
+  defp start_consuming(state) do
+    send(self(), :setup)
+    state
+  end
+
+  defp stop_consuming(state) do
+    if state.channel && state.consumer_tag do
+      try do
+        AMQP.Basic.cancel(state.channel, state.consumer_tag)
+        Logger.info("[Consumer Pagos] Consumo detenido")
+      catch
+        _, _ -> :ok
+      end
+    end
+    %{state | is_consuming: false, consumer_tag: nil}
   end
 end

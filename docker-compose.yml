@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  ventas:
+  ventas1:
     image: elixir:1.15.7-alpine
-    container_name: ventas
+    container_name: ventas1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -12,12 +12,40 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
-    command: elixir --sname ventas --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname ventas1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
-  compras:
+  ventas2:
     image: elixir:1.15.7-alpine
-    container_name: compras
+    container_name: ventas2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
+    command: elixir --sname ventas2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+  
+  ventas3:
+    image: elixir:1.15.7-alpine
+    container_name: ventas3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Ventas.Server
+    command: elixir --sname ventas3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  compras1:
+    image: elixir:1.15.7-alpine
+    container_name: compras1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -26,12 +54,40 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
-    command: elixir --sname compras --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname compras1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
-  pagos:
+  compras2:
     image: elixir:1.15.7-alpine
-    container_name: pagos
+    container_name: compras2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
+    command: elixir --sname compras2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  compras3:
+    image: elixir:1.15.7-alpine
+    container_name: compras3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Compras.Server
+    command: elixir --sname compras3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  pagos1:
+    image: elixir:1.15.7-alpine
+    container_name: pagos1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -40,12 +96,40 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
-    command: elixir --sname pagos --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname pagos1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
-  envios:
+  pagos2:
     image: elixir:1.15.7-alpine
-    container_name: envios
+    container_name: pagos2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
+    command: elixir --sname pagos2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  pagos3:
+    image: elixir:1.15.7-alpine
+    container_name: pagos3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Pagos.Server
+    command: elixir --sname pagos3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  envios1:
+    image: elixir:1.15.7-alpine
+    container_name: envios1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -54,12 +138,40 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
-    command: elixir --sname envios --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname envios1 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
-  infracciones:
+  envios2:
     image: elixir:1.15.7-alpine
-    container_name: infracciones
+    container_name: envios2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
+    command: elixir --sname envios2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  envios3:
+    image: elixir:1.15.7-alpine
+    container_name: envios3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Envios.Server
+    command: elixir --sname envios3 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  infracciones1:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones1
     network_mode: "host"
     volumes:
       - ./:/app
@@ -68,7 +180,35 @@ services:
       MIX_HOME: /app/mix_home
       HEX_HOME: /app/hex_home
       SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
-    command: elixir --sname infracciones --cookie ${SECRET} -S mix run --no-halt --no-compile
+    command: elixir --sname infracciones1 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  infracciones2:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones2
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
+    command: elixir --sname infracciones2 --cookie ${SECRET} -S mix run --no-halt --no-compile
+    user: "${DOCKER_UID}:${DOCKER_GID}"
+
+  infracciones3:
+    image: elixir:1.15.7-alpine
+    container_name: infracciones3
+    network_mode: "host"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      MIX_HOME: /app/mix_home
+      HEX_HOME: /app/hex_home
+      SERVER_TO_RUN: Elixir.Libremarket.Infracciones.Server
+    command: elixir --sname infracciones3 --cookie ${SECRET} -S mix run --no-halt --no-compile
     user: "${DOCKER_UID}:${DOCKER_GID}"
 
   rest:
@@ -100,4 +240,3 @@ services:
     user: "${DOCKER_UID}:${DOCKER_GID}"
     profiles:
       - testing
-

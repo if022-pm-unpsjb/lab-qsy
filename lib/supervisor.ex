@@ -24,8 +24,9 @@ defmodule Libremarket.Supervisor do
       ]
     ]
 
-    # Servicios AMQP (siempre activos) - Solo Connection
-    amqp_services = [
+    base_services = [
+      {Registry, keys: :unique, name: Libremarket.Registry},
+      {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]},
       Libremarket.AMQP.Connection
     ]
 
@@ -35,35 +36,35 @@ defmodule Libremarket.Supervisor do
         []
 
       "Elixir.Libremarket.Ventas.Server" ->
-        Logger.info("Iniciando servicio de Ventas con Consumer")
+        Logger.info("✓ Iniciando nodo de Ventas con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Ventas.Server, %{}},
           Libremarket.Ventas.Consumer
         ]
 
       "Elixir.Libremarket.Compras.Server" ->
-        Logger.info("Iniciando servicio de Compras con Consumer")
+        Logger.info("✓ Iniciando nodo de Compras con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Compras.Server, %{}},
-          Libremarket.Compras.Consumer,
+          Libremarket.Compras.Consumer
         ]
 
       "Elixir.Libremarket.Pagos.Server" ->
-        Logger.info("Iniciando servicio de Pagos con Consumer")
+        Logger.info("✓ Iniciando nodo de Pagos con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Pagos.Server, %{}},
           Libremarket.Pagos.Consumer
         ]
 
       "Elixir.Libremarket.Envios.Server" ->
-        Logger.info("Iniciando servicio de Envíos con Consumer")
+        Logger.info("✓ Iniciando nodo de Envíos con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Envios.Server, %{}},
           Libremarket.Envios.Consumer
         ]
 
       "Elixir.Libremarket.Infracciones.Server" ->
-        Logger.info("Iniciando servicio de Infracciones con Consumer")
+        Logger.info("Iniciando nodo de Infracciones con elección de líder (Bully Algorithm)")
         [
           {Libremarket.Infracciones.Server, %{}},
           Libremarket.Infracciones.Consumer
@@ -73,9 +74,8 @@ defmodule Libremarket.Supervisor do
         Logger.info("Iniciando servicio REST API")
         [Libremarket.ServiceRest]
 
-     server_name ->
+      server_name ->
         Logger.warning("Servidor no reconocido: #{server_name}")
-        # Intentar parsear el nombre y crear el servicio
         try do
           module = String.to_existing_atom(server_name)
           Logger.info("Iniciando módulo: #{inspect(module)}")
@@ -87,12 +87,10 @@ defmodule Libremarket.Supervisor do
         end
     end
 
-    children =
-      [
-        {Cluster.Supervisor, [topologies, [name: Libremarket.ClusterSupervisor]]}
-      ] ++ amqp_services ++ server_to_run
+    children = base_services ++ server_to_run
 
     Logger.info("Total de servicios a iniciar: #{length(children)}")
+    Logger.info("- Servicios base: #{length(base_services)}")
     Logger.info("- Servicios de negocio: #{length(server_to_run)}")
 
     Supervisor.init(children, strategy: :one_for_one)

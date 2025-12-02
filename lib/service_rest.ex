@@ -13,7 +13,18 @@ defmodule Libremarket.ServiceRest do
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: Jason
+
   plug :dispatch
+
+  # Funciones auxiliares para encontrar nodos
+  defp find_compras_node() do
+    nodes = [Node.self() | Node.list()]
+
+    Enum.find(nodes, fn node ->
+      node_str = Atom.to_string(node)
+      String.contains?(node_str, "compras")
+    end)
+  end
 
   # Listar productos disponibles
   get "/productos" do
@@ -23,19 +34,49 @@ defmodule Libremarket.ServiceRest do
 
   # Listar compras realizadas
   get "/compras" do
-    compras =
-      GenServer.call({:global, Libremarket.Compras.Server}, :listar_compras)
+    case find_compras_node() do
+      nil ->
+        send_resp(conn, 503, Jason.encode!(%{
+          error: "Servicio de compras no disponible"
+        }))
 
-    send_resp(conn, 200, Jason.encode!(compras))
+      node ->
+        try do
+          compras = :rpc.call(node, Libremarket.Compras.Server, :listar_compras, [])
+          send_resp(conn, 200, Jason.encode!(compras))
+        rescue
+          error ->
+            IO.puts("Error obteniendo compras: #{inspect(error)}")
+            send_resp(conn, 500, Jason.encode!(%{
+              error: "Error interno",
+              details: inspect(error)
+            }))
+        end
+    end
+  end
+
+  # Listar infracciones detectadas
+  get "/infracciones" do
+    try do
+      infracciones = Libremarket.Ui.listar_infracciones()
+      send_resp(conn, 200, Jason.encode!(infracciones))
+    rescue
+      error ->
+        IO.puts("Error obteniendo infracciones: #{inspect(error)}")
+        send_resp(conn, 500, Jason.encode!(%{
+          error: "Error interno",
+          details: inspect(error)
+        }))
+    end
   end
 
   # Realizar una compra
   post "/comprar" do
     case conn.body_params do
       %{
-        "producto_id" => producto_id, # Usar Integer, nunca string, sino tira error
-        "medio_pago" =>  medio_pago,
-        "forma_entrega" =>  forma_entrega
+        "producto_id" => producto_id,
+        "medio_pago" => medio_pago,
+        "forma_entrega" => forma_entrega
       } ->
         case Libremarket.Ui.comprar(producto_id, String.to_atom(forma_entrega), String.to_atom(medio_pago)) do
           {:ok, compra} ->
