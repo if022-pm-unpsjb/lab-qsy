@@ -4,6 +4,9 @@ defmodule Libremarket.Ui do
   Las compras son asíncronas - devuelven un ID de compra para seguimiento.
   """
 
+  # Timeout para llamadas RPC (20 segundos para dar tiempo al GenServer)
+  @rpc_timeout 20_000
+
   # Función auxiliar para encontrar un nodo de un servicio específico
   defp find_service_node(service_name) do
     nodes = [Node.self() | Node.list()]
@@ -37,23 +40,66 @@ defmodule Libremarket.Ui do
 
   def comprar(producto_id, forma_entrega, medio_pago) do
     try do
-      case find_service_node("compras") do
+      # Buscar el nodo líder específicamente
+      case find_leader_node("compras") do
         nil ->
+          IO.puts("No se encontró ningún líder de compras disponible")
           {:error, :servicio_no_disponible}
 
-        node ->
-          :rpc.call(node, Libremarket.Compras.Server, :comprar, [producto_id, medio_pago, forma_entrega])
+        leader_node ->
+          IO.puts("Realizando compra en nodo líder: #{leader_node}")
+
+          # Hacer RPC call con timeout explícito
+          case :rpc.call(leader_node, Libremarket.Compras.Server, :comprar,
+                        [producto_id, medio_pago, forma_entrega], @rpc_timeout) do
+            {:ok, result} ->
+              {:ok, result}
+
+            {:error, reason} ->
+              {:error, reason}
+
+            {:badrpc, {:EXIT, {:timeout, _}}} ->
+              IO.puts("Timeout: La compra está tomando mucho tiempo.")
+              IO.puts("Esto puede significar que algún servicio no está respondiendo.")
+              {:error, :timeout}
+
+            {:badrpc, reason} ->
+              IO.puts("Error de RPC: #{inspect(reason)}")
+              {:error, :servicio_no_disponible}
+
+            other ->
+              IO.puts("Respuesta inesperada de compras: #{inspect(other)}")
+              {:error, :respuesta_inesperada}
+          end
       end
     rescue
       error ->
-        IO.puts("Error comunicándose con servicio de compras: #{inspect(error)}")
+        IO.puts("Excepción comunicándose con servicio de compras: #{inspect(error)}")
         {:error, :servicio_no_disponible}
     catch
       :exit, {:timeout, _} ->
         IO.puts("Timeout: La compra está tomando mucho tiempo.")
-        IO.puts("Esto puede significar que algún servicio no está respondiendo.")
         {:error, :timeout}
     end
+  end
+
+  # Función auxiliar para encontrar el nodo líder de un servicio
+  defp find_leader_node(service_name) do
+    nodes = [Node.self() | Node.list()]
+
+    compras_nodes = Enum.filter(nodes, fn node ->
+      node_str = Atom.to_string(node)
+      String.contains?(node_str, service_name)
+    end)
+
+    # Buscar el líder entre los nodos de compras
+    Enum.find(compras_nodes, fn node ->
+      try do
+        :rpc.call(node, Libremarket.LeaderElection, :is_leader?, [service_name], 2000) == true
+      catch
+        _, _ -> false
+      end
+    end)
   end
 
   def listar_productos() do
@@ -64,7 +110,10 @@ defmodule Libremarket.Ui do
           %{}
 
         node ->
-          :rpc.call(node, Libremarket.Ventas.Server, :listar_productos, [])
+          case :rpc.call(node, Libremarket.Ventas.Server, :listar_productos, [], 5000) do
+            {:badrpc, _} -> %{}
+            productos -> productos
+          end
       end
     rescue
       error ->
@@ -170,7 +219,10 @@ defmodule Libremarket.Ui do
           []
 
         node ->
-          :rpc.call(node, Libremarket.Compras.Server, :listar_compras, [])
+          case :rpc.call(node, Libremarket.Compras.Server, :listar_compras, [], 5000) do
+            {:badrpc, _} -> []
+            compras -> compras
+          end
       end
     rescue
       error ->
@@ -225,7 +277,10 @@ defmodule Libremarket.Ui do
           []
 
         n ->
-          :rpc.call(n, Libremarket.Infracciones.Server, :listar_infracciones, [])
+          case :rpc.call(n, Libremarket.Infracciones.Server, :listar_infracciones, [], 5000) do
+            {:badrpc, _} -> []
+            infracciones -> infracciones
+          end
       end
     rescue
       error ->

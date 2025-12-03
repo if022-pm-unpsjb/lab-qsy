@@ -98,16 +98,28 @@ defmodule Libremarket.LeaderElection do
         # Nodo de menor o igual prioridad - debemos ser líder
         Logger.info("[Leader Election] Rechazando nodo de menor prioridad")
 
-        # Si no somos líder, convertirnos en líder INMEDIATAMENTE
-        new_state = if not state.is_leader do
-          Logger.info("[Leader Election] No soy líder pero tengo mayor prioridad, convirtiéndome en líder inmediatamente")
-          # Convertirse en líder síncronamente
-          become_leader(%{state | election_in_progress: false, first_election_done: true})
+        # Si no somos líder pero hay un líder conocido de mayor prioridad, no hacer nada
+        if not state.is_leader and state.current_leader != nil do
+          current_leader_priority = extract_priority(state.current_leader)
+          if current_leader_priority > state.priority do
+            Logger.info("[Leader Election] Ya hay un líder de mayor prioridad: #{state.current_leader}")
+            {:reply, :reject, state}
+          else
+            # El líder actual es de menor prioridad, convertirnos en líder
+            Logger.info("[Leader Election] No soy líder pero tengo mayor prioridad que el actual, convirtiéndome en líder")
+            new_state = become_leader(%{state | election_in_progress: false, first_election_done: true})
+            {:reply, :reject, new_state}
+          end
         else
-          state
+          # Si no somos líder y no hay líder conocido, convertirnos en líder
+          new_state = if not state.is_leader do
+            Logger.info("[Leader Election] No soy líder pero tengo mayor prioridad, convirtiéndome en líder inmediatamente")
+            become_leader(%{state | election_in_progress: false, first_election_done: true})
+          else
+            state
+          end
+          {:reply, :reject, new_state}
         end
-
-        {:reply, :reject, new_state}
     end
   end
 
@@ -121,9 +133,9 @@ defmodule Libremarket.LeaderElection do
         new_state = if state.is_leader do
           Logger.info("[Leader Election] Dejando de ser líder, aceptando nuevo coordinador")
           notify_leader_change(state, false)
-          %{state | is_leader: false, current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond)}
+          %{state | is_leader: false, current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond), election_in_progress: false}
         else
-          %{state | current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond)}
+          %{state | current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond), election_in_progress: false}
         end
 
         {:reply, :ok, new_state}
@@ -135,9 +147,9 @@ defmodule Libremarket.LeaderElection do
           Logger.warning("[Leader Election] Conflicto de prioridad, aceptando #{from_node} por desempate")
           new_state = if state.is_leader do
             notify_leader_change(state, false)
-            %{state | is_leader: false, current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond)}
+            %{state | is_leader: false, current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond), election_in_progress: false}
           else
-            %{state | current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond)}
+            %{state | current_leader: from_node, last_heartbeat: System.monotonic_time(:millisecond), election_in_progress: false}
           end
           {:reply, :ok, new_state}
         else
@@ -169,19 +181,32 @@ defmodule Libremarket.LeaderElection do
       Logger.debug("[Leader Election] Nodos participantes: #{inspect(nodes)}")
     end
 
-    # Si descubrimos nuevos nodos de mayor prioridad y somos líder, iniciar elección
+    # CRÍTICO: Solo iniciar re-elección si realmente el líder actual no está en la lista
+    # o si no hay líder y ya pasó la primera elección
     new_state = if state.is_leader and state.first_election_done do
       higher_priority_nodes = Enum.filter(nodes, fn node ->
         extract_priority(node) > state.priority
       end)
 
+      # CAMBIO CLAVE: Solo ceder liderazgo si hay nodos de mayor prioridad Y no estamos en elección
       if not Enum.empty?(higher_priority_nodes) and not state.election_in_progress do
-        Logger.info("[Leader Election] Detectados nodos de mayor prioridad, cediendo liderazgo e iniciando elección")
-        # Ceder el liderazgo inmediatamente
-        notify_leader_change(state, false)
-        # Marcar elección en progreso antes de enviar el mensaje
-        Process.send(self(), :start_election, [])
-        %{state | nodes: nodes, election_in_progress: true, is_leader: false, current_leader: nil}
+        # Verificar si estos nodos están realmente disponibles antes de ceder
+        available_higher = Enum.any?(higher_priority_nodes, fn node ->
+          try do
+            :rpc.call(node, :erlang, :node, [], 1000) == node
+          catch
+            _, _ -> false
+          end
+        end)
+
+        if available_higher do
+          Logger.info("[Leader Election] Detectados nodos de mayor prioridad disponibles, cediendo liderazgo")
+          notify_leader_change(state, false)
+          Process.send(self(), :start_election, [])
+          %{state | nodes: nodes, election_in_progress: true, is_leader: false, current_leader: nil}
+        else
+          %{state | nodes: nodes}
+        end
       else
         %{state | nodes: nodes}
       end
@@ -236,59 +261,29 @@ defmodule Libremarket.LeaderElection do
 
   @impl true
   def handle_info(:start_election, state) do
-    # Log para debugging
     Logger.debug("[Leader Election] handle_info(:start_election) - election_in_progress: #{state.election_in_progress}")
 
     # Permitir re-elección si no somos líder, incluso si election_in_progress está en true
-    # Esto es importante para cuando cedimos liderazgo
     if state.election_in_progress and state.is_leader do
       {:noreply, state}
     else
       Logger.info("[Leader Election] Iniciando elección en nodo #{state.node_name}")
 
-      # Obtener nodos de mayor prioridad
-      higher_priority_nodes = Enum.filter(state.nodes, fn node ->
-        node != state.node_name and extract_priority(node) > state.priority
-      end)
-
-      new_state = if Enum.empty?(higher_priority_nodes) do
-        # No hay nodos de mayor prioridad, convertirse en líder
-        Logger.info("[Leader Election] Sin nodos de mayor prioridad, convirtiéndose en líder")
-        state_after_leader = become_leader(state)
-        %{state_after_leader | first_election_done: true, election_in_progress: false}
-      else
-        # Enviar mensaje de elección a nodos de mayor prioridad
-        Logger.info("[Leader Election] Enviando mensajes de elección a #{length(higher_priority_nodes)} nodos")
-
-        responses = Enum.map(higher_priority_nodes, fn node ->
-          try do
-            result = :rpc.call(node, GenServer, :call, [
-              via_tuple(state.service_name),
-              {:election, state.node_name, state.priority}
-            ], 2_000)
-            {node, result}
-          catch
-            _, _ -> {node, :error}
-          end
-        end)
-
-        # Si algún nodo de mayor prioridad respondió OK, esperar
-        ok_responses = Enum.filter(responses, fn {_node, result} -> result == :ok end)
-
-        if Enum.empty?(ok_responses) do
-          Logger.info("[Leader Election] Ningún nodo de mayor prioridad respondió, convirtiéndose en líder")
-          state_after_leader = become_leader(state)
-          %{state_after_leader | first_election_done: true, election_in_progress: false}
+      # CAMBIO CRÍTICO: Verificar primero si ya hay un líder activo de mayor prioridad
+      if state.current_leader != nil do
+        leader_priority = extract_priority(state.current_leader)
+        if leader_priority > state.priority do
+          # Ya hay un líder de mayor prioridad, no hacer nada
+          Logger.info("[Leader Election] Ya existe un líder de mayor prioridad: #{state.current_leader}, cancelando elección")
+          {:noreply, %{state | election_in_progress: false, first_election_done: true}}
         else
-          Logger.info("[Leader Election] Nodos de mayor prioridad respondieron, esperando nuevo líder")
-
-          # Esperar un tiempo para que el nuevo líder se anuncie
-          Process.send_after(self(), :election_timeout, @election_timeout)
-          %{state | is_leader: false, election_in_progress: true, first_election_done: true}
+          # El líder actual es de menor prioridad, continuar con elección
+          conduct_election(state)
         end
+      else
+        # No hay líder conocido, conducir elección normal
+        conduct_election(state)
       end
-
-      {:noreply, new_state}
     end
   end
 
@@ -309,6 +304,54 @@ defmodule Libremarket.LeaderElection do
   end
 
   # Private Functions
+
+  defp conduct_election(state) do
+    # Obtener nodos de mayor prioridad
+    higher_priority_nodes = Enum.filter(state.nodes, fn node ->
+      node != state.node_name and extract_priority(node) > state.priority
+    end)
+
+    new_state = if Enum.empty?(higher_priority_nodes) do
+      # No hay nodos de mayor prioridad, convertirse en líder
+      Logger.info("[Leader Election] Sin nodos de mayor prioridad, convirtiéndose en líder")
+      state_after_leader = become_leader(state)
+      %{state_after_leader | first_election_done: true, election_in_progress: false}
+    else
+      # Enviar mensaje de elección a nodos de mayor prioridad
+      Logger.info("[Leader Election] Enviando mensajes de elección a #{length(higher_priority_nodes)} nodos")
+
+      responses = Enum.map(higher_priority_nodes, fn node ->
+        try do
+          result = :rpc.call(node, GenServer, :call, [
+            via_tuple(state.service_name),
+            {:election, state.node_name, state.priority}
+          ], 2_000)
+          {node, result}
+        catch
+          _, _ -> {node, :error}
+        end
+      end)
+
+      # Si algún nodo de mayor prioridad respondió OK o REJECT, esperar
+      valid_responses = Enum.filter(responses, fn {_node, result} ->
+        result == :ok or result == :reject
+      end)
+
+      if Enum.empty?(valid_responses) do
+        # Nadie respondió, convertirse en líder
+        Logger.info("[Leader Election] Ningún nodo de mayor prioridad respondió, convirtiéndose en líder")
+        state_after_leader = become_leader(state)
+        %{state_after_leader | first_election_done: true, election_in_progress: false}
+      else
+        Logger.info("[Leader Election] Nodos de mayor prioridad respondieron, esperando coordinador")
+        # Esperar un tiempo para que el nuevo líder se anuncie
+        Process.send_after(self(), :election_timeout, @election_timeout)
+        %{state | is_leader: false, election_in_progress: true, first_election_done: true}
+      end
+    end
+
+    {:noreply, new_state}
+  end
 
   defp become_leader(state) do
     Logger.info("[Leader Election] #{state.node_name} es ahora el LÍDER")

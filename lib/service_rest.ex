@@ -78,17 +78,58 @@ defmodule Libremarket.ServiceRest do
         "medio_pago" => medio_pago,
         "forma_entrega" => forma_entrega
       } ->
-        case Libremarket.Ui.comprar(producto_id, String.to_atom(forma_entrega), String.to_atom(medio_pago)) do
-          {:ok, compra} ->
-            send_resp(conn, 201, Jason.encode!(%{
-              status: "ok",
-              compra: compra
-            }))
+        try do
+          case Libremarket.Ui.comprar(producto_id, String.to_atom(forma_entrega), String.to_atom(medio_pago)) do
+            {:ok, compra} ->
+              send_resp(conn, 201, Jason.encode!(%{
+                status: "ok",
+                compra: compra
+              }))
 
-          {:error, reason} ->
-            send_resp(conn, 400, Jason.encode!(%{
+            {:error, :timeout} ->
+              send_resp(conn, 504, Jason.encode!(%{
+                status: "error",
+                reason: "La compra está tardando demasiado. El servicio puede estar sobrecargado."
+              }))
+
+            {:error, :servicio_no_disponible} ->
+              send_resp(conn, 503, Jason.encode!(%{
+                status: "error",
+                reason: "Servicio de compras no disponible"
+              }))
+
+            {:error, :no_leader} ->
+              send_resp(conn, 503, Jason.encode!(%{
+                status: "error",
+                reason: "No hay líder disponible para procesar la compra"
+              }))
+
+            {:error, :not_leader} ->
+              send_resp(conn, 503, Jason.encode!(%{
+                status: "error",
+                reason: "El nodo contactado no es el líder"
+              }))
+
+            {:error, reason} ->
+              send_resp(conn, 400, Jason.encode!(%{
+                status: "error",
+                reason: to_string(reason)
+              }))
+
+            other ->
+              IO.puts("Respuesta inesperada de Ui.comprar: #{inspect(other)}")
+              send_resp(conn, 500, Jason.encode!(%{
+                status: "error",
+                reason: "Respuesta inesperada del servicio"
+              }))
+          end
+        rescue
+          error ->
+            IO.puts("Excepción en /comprar: #{inspect(error)}")
+            IO.puts("Stacktrace: #{inspect(__STACKTRACE__)}")
+            send_resp(conn, 500, Jason.encode!(%{
               status: "error",
-              reason: to_string(reason)
+              reason: "Error interno del servidor"
             }))
         end
 
