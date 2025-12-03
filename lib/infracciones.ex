@@ -74,10 +74,7 @@ defmodule Libremarket.Infracciones.Server do
 
   @impl true
   def init(_state) do
-    Logger.info("""
-    Servidor de Infracciones iniciado en nodo #{Node.self()}
-    Esperando elección de líder...
-    """)
+    Logger.info("Servidor de Infracciones iniciado en nodo #{Node.self()}")
 
     {:ok, _pid} = Libremarket.LeaderElection.start_link(
       service_name: @service_name,
@@ -97,7 +94,6 @@ defmodule Libremarket.Infracciones.Server do
   @impl true
   def handle_call({:detectar_infracciones, id_compra}, _from, state) do
     if not state.is_leader do
-      Logger.warning("Intento de escritura en seguidor - operación rechazada")
       {:reply, {:error, :not_leader}, state}
     else
       tiene_infraccion = Libremarket.Infracciones.detectar_infracciones()
@@ -140,10 +136,6 @@ defmodule Libremarket.Infracciones.Server do
   @impl true
   def handle_call({:replicate_state, infracciones, from_node}, _from, state) do
     if not state.is_leader do
-      if length(infracciones) > 0 do
-        Logger.info("Replicando estado desde líder #{from_node}: #{length(infracciones)} infracciones")
-      end
-
       new_state = %{state |
         infracciones: infracciones,
         replicated_from: from_node,
@@ -158,12 +150,8 @@ defmodule Libremarket.Infracciones.Server do
 
   @impl true
   def handle_info({:leader_change, is_leader}, state) do
-    Logger.info("""
-    [Infracciones] Cambio de liderazgo
-    Nodo: #{Node.self()}
-    Es líder: #{is_leader}
-    """)
-
+    status = if is_leader, do: "LÍDER", else: "SEGUIDOR"
+    Logger.info("[Infracciones] #{status}")
     {:noreply, %{state | is_leader: is_leader}}
   end
 
@@ -188,7 +176,6 @@ defmodule Libremarket.Infracciones.Server do
   defp handle_leader_change(is_leader) do
     case Process.whereis(__MODULE__) do
       nil ->
-        Logger.warning("[Infracciones] No se encontró el proceso local")
         :ok
       pid when is_pid(pid) ->
         send(pid, {:leader_change, is_leader})
@@ -199,27 +186,15 @@ defmodule Libremarket.Infracciones.Server do
     follower_nodes = get_follower_nodes()
 
     if not Enum.empty?(follower_nodes) and length(infracciones) > 0 do
-      Logger.info("Replicando #{length(infracciones)} infracciones a #{length(follower_nodes)} seguidores")
-
       Enum.each(follower_nodes, fn node ->
         spawn(fn ->
           try do
-            result = :rpc.call(node, GenServer, :call, [
+            :rpc.call(node, GenServer, :call, [
               __MODULE__,
               {:replicate_state, infracciones, Node.self()}
             ], 3_000)
-
-            case result do
-              :ok ->
-                Logger.debug("✓ Replicación exitosa a #{node}")
-              {:error, reason} ->
-                Logger.error("Error en replicación a #{node}: #{inspect(reason)}")
-              other ->
-                Logger.warning("Respuesta inesperada de #{node}: #{inspect(other)}")
-            end
           catch
-            kind, error ->
-              Logger.error("Error replicando a #{node}: #{kind} - #{inspect(error)}")
+            _, _ -> :ok
           end
         end)
       end)
@@ -276,7 +251,6 @@ defmodule Libremarket.Infracciones.Consumer do
   @check_leader_interval 5_000
 
   def start_link(opts \\ []) do
-    Logger.info("Iniciando Consumer de Infracciones")
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -293,11 +267,11 @@ defmodule Libremarket.Infracciones.Consumer do
     new_state =
       cond do
         is_leader and not state.is_consuming ->
-          Logger.info("[Consumer Infracciones] Este nodo es LÍDER, iniciando consumo de mensajes")
+          Logger.info("[Consumer Infracciones] LÍDER - Iniciando consumo")
           start_consuming(state)
 
         not is_leader and state.is_consuming ->
-          Logger.info("[Consumer Infracciones] Este nodo ya NO es líder, deteniendo consumo de mensajes")
+          Logger.info("[Consumer Infracciones] SEGUIDOR - Deteniendo consumo")
           stop_consuming(state)
 
         true ->
@@ -313,11 +287,10 @@ defmodule Libremarket.Infracciones.Consumer do
     with {:ok, channel} <- Connection.get_channel(),
          :ok <- setup_queue(channel),
          {:ok, consumer_tag} <- AMQP.Basic.consume(channel, @queue) do
-      Logger.info("Consumer de Infracciones iniciado en cola: #{@queue}")
       {:noreply, %{state | channel: channel, consumer_tag: consumer_tag, is_consuming: true}}
     else
       error ->
-        Logger.error("Error configurando consumer de Infracciones: #{inspect(error)}")
+        Logger.error("Error configurando consumer: #{inspect(error)}")
         Process.send_after(self(), :setup, 5000)
         {:noreply, state}
     end
@@ -356,8 +329,6 @@ defmodule Libremarket.Infracciones.Consumer do
   end
 
   defp process_message(%{"request_type" => "detectar_infracciones", "compra_id" => compra_id, "producto_id" => producto_id}) do
-    Logger.info("Consumer procesando: detectar infracciones para compra #{compra_id}, producto #{producto_id}")
-
     tiene_infraccion = Libremarket.Infracciones.Server.detectar_infracciones(producto_id)
 
     case tiene_infraccion do
@@ -390,7 +361,7 @@ defmodule Libremarket.Infracciones.Consumer do
   end
 
   defp process_message(message) do
-    Logger.warning("Mensaje no reconocido en Infracciones Consumer: #{inspect(message)}")
+    Logger.warning("Mensaje no reconocido: #{inspect(message)}")
   end
 
   defp ack_message(meta) do
@@ -414,7 +385,6 @@ defmodule Libremarket.Infracciones.Consumer do
     if state.channel && state.consumer_tag do
       try do
         AMQP.Basic.cancel(state.channel, state.consumer_tag)
-        Logger.info("[Consumer Infracciones] Consumo detenido")
       catch
         _, _ -> :ok
       end
